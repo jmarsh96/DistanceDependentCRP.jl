@@ -406,8 +406,16 @@ end
 """
     compute_psis_loo(ll_matrix::AbstractMatrix{Float64})
 
-Pareto-Smoothed Importance Sampling Leave-One-Out cross-validation (PSIS-LOO).
-Uses the Zhang & Stephens (2009) GPD tail-fitting approximation.
+Pareto-Smoothed Importance Sampling Leave-One-Out cross-validation (PSIS-LOO),
+following Vehtari, Simpson, Gelman, Yao and Gabry (2024) and the reference
+implementation in the R `loo` package.
+
+For each observation the importance ratios `1 / p(y_i | θ^(s))` are computed;
+the largest `M = ceil(min(0.2 S, 3 √S))` are replaced by expected order
+statistics of a generalised Pareto distribution fitted to their exceedances
+over the `(M+1)`-th largest ratio, using the Zhang & Stephens (2009) estimator
+with the weakly informative prior on the shape; all weights are then truncated
+at the largest raw ratio.
 
 # Arguments
 - `ll_matrix`: `(n_samples × n_obs)` matrix where `ll_matrix[s, i] = log p(y_i | θ^(s))`
@@ -416,48 +424,88 @@ Uses the Zhang & Stephens (2009) GPD tail-fitting approximation.
 `NamedTuple` with fields:
 - `elpd_loo`: Total expected log pointwise predictive density (sum over obs)
 - `loo_i`: Per-observation ELPD-LOO contributions (length n)
-- `k_hat`: Per-observation Pareto shape estimates (k̂ > 0.7 indicates instability)
+- `k_hat`: Per-observation Pareto shape estimates. `k̂ > min(1 - 1/log10(S), 0.7)`
+  means the estimate for that observation is unreliable; `Inf` means the tail
+  could not be fitted (too few draws, or a constant tail).
 """
 function compute_psis_loo(ll_matrix::AbstractMatrix{Float64})
     S, n = size(ll_matrix)
     loo_i = zeros(n)
     k_hat = zeros(n)
-
     for i in 1:n
-        ll_i    = ll_matrix[:, i]
-        log_r   = -ll_i                       # log importance ratios
-        log_r_c = log_r .- maximum(log_r)     # centred for numerical stability
-
-        M = min(floor(Int, S ÷ 5), ceil(Int, 3 * sqrt(S)))
-        M = max(M, 5)  # need at least a few tail samples
-        sorted_idx = sortperm(log_r_c, rev=true)
-        r_tail = exp.(log_r_c[sorted_idx[1:M]])
-
-        # Fit GPD via method of moments (Zhang & Stephens 2009)
-        m_tail = mean(r_tail)
-        v_tail = var(r_tail)
-        k = v_tail < 1e-15 ? 0.0 : (1.0 - m_tail^2 / v_tail) / 2.0
-        σ = max(m_tail * (1.0 - k), 1e-10)
-        k_hat[i] = k
-
-        log_r_smooth = copy(log_r_c)
-        if k < 0.7
-            for m_idx in 1:M
-                p_m = (m_idx - 0.5) / M
-                q_m = k ≈ 0.0 ? σ * (-log(1 - p_m)) :
-                                 σ / k * ((1 - p_m)^(-k) - 1.0)
-                log_r_smooth[sorted_idx[m_idx]] = min(log(max(q_m, 0.0) + 1e-300), 0.0)
-            end
-        end
-        log_r_full = log_r_smooth .+ maximum(log_r)
-
-        # elpd_loo_i = log Σ_s [r̃^(s) * p(y_i|θ^(s))] - log Σ_s r̃^(s)
-        num   = _logsumexp(ll_i .+ log_r_full)
-        denom = _logsumexp(log_r_full)
-        loo_i[i] = num - denom
+        ll_i = ll_matrix[:, i]
+        lw, k_hat[i] = _psis_smooth(-ll_i)
+        loo_i[i] = _logsumexp(lw .+ ll_i)
     end
     return (elpd_loo=sum(loo_i), loo_i=loo_i, k_hat=k_hat)
 end
+
+"""
+    _psis_smooth(log_ratios) -> (log_weights, k_hat)
+
+Pareto-smoothed, truncated and normalised log importance weights for one
+observation. Returned weights satisfy `logsumexp(log_weights) == 0`.
+"""
+function _psis_smooth(log_ratios::AbstractVector{<:Real})
+    S = length(log_ratios)
+    lw = log_ratios .- maximum(log_ratios)     # max-normalised, so max(lw) == 0
+    M = ceil(Int, min(0.2 * S, 3 * sqrt(S)))
+    k = Inf
+    if M >= 5 && S > M
+        ord = sortperm(lw)
+        tail_ids = ord[(S - M + 1):S]
+        lw_tail = lw[tail_ids]                  # ascending
+        if maximum(lw_tail) - minimum(lw_tail) > eps(Float64) / 100
+            cutoff = lw[ord[S - M]]
+            u = exp(cutoff)
+            k, σ = _gpd_fit(exp.(lw_tail) .- u)
+            if isfinite(k)
+                for (m, id) in enumerate(tail_ids)
+                    p = (m - 0.5) / M
+                    lw[id] = log(_gpd_quantile(p, k, σ) + u)
+                end
+            end
+        end
+    end
+    # Truncate at the largest raw weight, then normalise.
+    lw .= min.(lw, 0.0)
+    lw .-= _logsumexp(lw)
+    return lw, k
+end
+
+"""
+    _gpd_fit(x) -> (k, σ)
+
+Generalised Pareto fit to non-negative exceedances `x` (ascending order) by the
+empirical Bayes estimator of Zhang & Stephens (2009), with the shape shrunk
+towards 0.5 by the weakly informative prior of Vehtari et al. (2024). `k > 0`
+indicates a heavy tail.
+"""
+function _gpd_fit(x::AbstractVector{<:Real}; min_grid_pts::Int = 30, prior::Real = 3.0)
+    N = length(x)
+    xmax = x[end]
+    xmax > 0 || return (Inf, NaN)
+    M = min_grid_pts + floor(Int, sqrt(N))
+    xstar = x[max(1, floor(Int, N / 4 + 0.5))]  # first quartile
+    xstar > 0 || (xstar = minimum(filter(>(0), x)))
+    θ = [1 / xmax + (1 - sqrt(M / (j - 0.5))) / prior / xstar for j in 1:M]
+    # Profile log-likelihood of the GPD at each grid point.
+    lθ = map(θ) do t
+        kt = mean(log1p.(-t .* x))
+        v = N * (log(-t / kt) - kt - 1)
+        isfinite(v) ? v : -Inf
+    end
+    all(isinf, lθ) && return (Inf, NaN)
+    w = exp.(lθ .- _logsumexp(lθ))
+    θ_hat = sum(θ .* w)
+    k = mean(log1p.(-θ_hat .* x))
+    σ = -k / θ_hat
+    k = (N * k + 10 * 0.5) / (N + 10)          # weakly informative prior on k
+    return (isfinite(k) && isfinite(σ) && σ > 0) ? (k, σ) : (Inf, NaN)
+end
+
+# Quantile function of the generalised Pareto distribution with location 0.
+_gpd_quantile(p, k, σ) = abs(k) < 1e-12 ? -σ * log1p(-p) : σ * expm1(-k * log1p(-p)) / k
 
 # Internal log-sum-exp
 _logsumexp(x) = (m = maximum(x); m + log(sum(exp.(x .- m))))
