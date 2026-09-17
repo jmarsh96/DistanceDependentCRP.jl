@@ -1,6 +1,6 @@
 name = "DistanceDependentCRP"
 uuid = "de57f43c-cd6e-4458-91da-1920171fba1c"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Joseph Marsh <joe.s.marsh@gmail.com> and contributors"]
 
 [deps]
