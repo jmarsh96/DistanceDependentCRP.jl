@@ -23,4 +23,5 @@ include("test_helpers.jl")
     include("test_continuous_models.jl")
     include("test_rjmcmc.jl")
     include("test_mcmc_integration.jl")
+    include("test_diagnostics.jl")
 end

@@ -34,18 +34,6 @@ function fit_inverse_gamma_moments(data)
     return (α, β)
 end
 
-"""
-    fit_gamma_shape_moments(data) -> Float64 or nothing
-
-Estimate Gamma shape parameter α via method of moments.
-For X ~ Gamma(α, β):
-  E[X] = α/β
-  Var[X] = α/β²
-
-Therefore: α = E[X]²/Var[X] = μ²/σ²
-
-Returns nothing if fitting fails (insufficient data, zero/negative variance).
-"""
 # ============================================================================
 # Generic MixedProposal Dispatch
 # ============================================================================
@@ -110,6 +98,18 @@ end
     end
 end
 
+"""
+    fit_gamma_shape_moments(data) -> Float64 or nothing
+
+Estimate Gamma shape parameter α via method of moments.
+For X ~ Gamma(α, β):
+  E[X] = α/β
+  Var[X] = α/β²
+
+Therefore: α = E[X]²/Var[X] = μ²/σ²
+
+Returns nothing if fitting fails (insufficient data, zero/negative variance).
+"""
 function fit_gamma_shape_moments(data)
     n = length(data)
     n < 2 && return nothing
