@@ -35,6 +35,7 @@ export FixedDistributionProposal, MixedProposal
 
 # Fixed-dimension proposals for RJMCMC
 export FixedDimensionProposal, NoUpdate, WeightedMean, Resample, MixedFixedDim
+export LinkProposal, UniformLink, PriorLink
 
 # Poisson model variants
 export PoissonClusterRates, PoissonClusterRatesState, PoissonClusterRatesPriors, PoissonClusterRatesSamples

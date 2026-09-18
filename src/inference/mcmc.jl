@@ -7,6 +7,43 @@
 using Random, StatsBase
 
 # ============================================================================
+# Link proposals
+# ============================================================================
+
+"""
+    propose_link(i, j_old, log_DDCRP, link_proposal) -> (j_star, log_prior_ratio)
+
+Propose a new value for `c_i` and return it with the log prior ratio that
+belongs in the acceptance probability.
+
+Under `UniformLink` the draw is uniform, the proposal is symmetric, and the
+prior ratio `log f(d_{i,j*}) - log f(d_{i,j_old})` is returned. Under
+`PriorLink` the draw is from the ddCRP prior itself, whose proposal ratio
+cancels that prior ratio exactly, so zero is returned.
+"""
+function propose_link(i::Int, j_old::Int, log_DDCRP::AbstractMatrix, ::UniformLink)
+    j_star = rand(1:size(log_DDCRP, 2))
+    return j_star, log_DDCRP[i, j_star] - log_DDCRP[i, j_old]
+end
+
+function propose_link(i::Int, ::Int, log_DDCRP::AbstractMatrix, ::PriorLink)
+    row = view(log_DDCRP, i, :)
+    n = length(row)
+    m = maximum(row)
+    total = 0.0
+    @inbounds for j in 1:n
+        total += exp(row[j] - m)
+    end
+    u = rand() * total
+    acc = 0.0
+    @inbounds for j in 1:n
+        acc += exp(row[j] - m)
+        acc >= u && return j, 0.0
+    end
+    return n, 0.0                      # only reachable through rounding
+end
+
+# ============================================================================
 # update_c! - Generic assignment update dispatcher
 # ============================================================================
 
@@ -38,7 +75,10 @@ function update_c!(
     
     for i in 1:nobs(data)
         update_type = missing_mask[i] ? MissingUpdate() : StandardUpdate()
-        move_type, j_star, accepted = update_c_i!(model, i, state, data, priors, log_DDCRP, proposal, fixed_dim_proposal, update_type)
+        move_type, j_star, accepted = update_c_i!(model, i, state, data, priors, log_DDCRP,
+            proposal, fixed_dim_proposal,
+            opts.link_proposal, update_type
+        )
         push!(diagnostics, (move_type, i, j_star, accepted))
     end
 
@@ -55,6 +95,7 @@ function update_c_i!(
     log_DDCRP::AbstractMatrix,
     ::ConjugateProposal,
     ::FixedDimensionProposal,
+    ::LinkProposal,
     ::StandardUpdate
 )
     n = length(state.c)
@@ -99,6 +140,7 @@ function update_c_i!(
     log_DDCRP::AbstractMatrix,
     ::ConjugateProposal,
     ::FixedDimensionProposal,
+    ::LinkProposal,
     ::MissingUpdate
 )
     n = length(state.c)
@@ -123,6 +165,7 @@ function update_c_i!(
     log_DDCRP::AbstractMatrix,
     proposal::BirthProposal,
     fixed_dim_proposal::FixedDimensionProposal,
+    link_proposal::LinkProposal,
     ::StandardUpdate
 )
     n = length(state.c)
@@ -134,13 +177,13 @@ function update_c_i!(
     S_i = get_moving_set(i, state.c, table_Si)
     # table_l deferred to birth branch — avoids setdiff on every call
 
-    j_star = rand(1:n)
+    # Under UniformLink the returned delta is the change in the log prior, which
+    # is O(1) since only c[i] moves; under PriorLink it is zero, the proposal
+    # ratio having cancelled the prior ratio.
+    j_star, ddcrp_delta = propose_link(i, j_old, log_DDCRP, link_proposal)
 
     j_old_in_Si = j_old in S_i
     j_star_in_Si = j_star in S_i
-
-    # Delta DDCRP: only c[i] changes, so delta is O(1)
-    ddcrp_delta = log_DDCRP[i, j_star] - log_DDCRP[i, j_old]
 
     if !j_old_in_Si && j_star_in_Si
         # ===== BIRTH MOVE =====
@@ -299,6 +342,7 @@ function update_c_i!(
     log_DDCRP::AbstractMatrix,
     proposal::BirthProposal,
     ::FixedDimensionProposal,
+    ::LinkProposal,
     ::MissingUpdate
 )
     n = length(state.c)
