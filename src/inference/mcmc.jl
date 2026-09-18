@@ -76,8 +76,9 @@ function update_c!(
     for i in 1:nobs(data)
         update_type = missing_mask[i] ? MissingUpdate() : StandardUpdate()
         move_type, j_star, accepted = update_c_i!(model, i, state, data, priors, log_DDCRP,
-proposal, fixed_dim_proposal,
-opts.link_proposal, update_type)
+            proposal, fixed_dim_proposal,
+            opts.link_proposal, update_type
+        )
         push!(diagnostics, (move_type, i, j_star, accepted))
     end
 
