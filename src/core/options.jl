@@ -23,6 +23,7 @@ struct MCMCOptions
     prop_sds::Dict{Symbol, Float64}
     track_diagnostics::Bool
     track_pairwise::Bool
+    link_proposal::LinkProposal
 end
 
 # Default constructor
@@ -38,6 +39,7 @@ function MCMCOptions(;
     ),
     track_diagnostics::Bool = true,
     track_pairwise::Bool = false,
+    link_proposal::LinkProposal = UniformLink(),
 )
     return MCMCOptions(
         n_samples,
@@ -46,6 +48,7 @@ function MCMCOptions(;
         prop_sds,
         track_diagnostics,
         track_pairwise,
+        link_proposal,
     )
 end
 

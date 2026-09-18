@@ -390,3 +390,33 @@ abstract type CustomerUpdate end
 
 struct StandardUpdate <: CustomerUpdate end
 struct MissingUpdate <: CustomerUpdate end
+
+# ============================================================================
+# Link proposals
+#
+# How a new value of c_i is proposed in the RJMCMC assignment update. The
+# choice matters most when the decay function gives many pairs negligible
+# weight (a truncated or windowed kernel, say): a uniform draw then spends most
+# proposals on links the prior all but forbids, each of which still costs a
+# likelihood evaluation before it is rejected.
+# ============================================================================
+
+abstract type LinkProposal end
+
+"""
+    UniformLink()
+
+Propose `c_i` uniformly over the `n` observations. Symmetric, so the proposal
+ratio is 1 and the ddCRP prior ratio remains in the acceptance probability.
+"""
+struct UniformLink <: LinkProposal end
+
+"""
+    PriorLink()
+
+Propose `c_i` from the ddCRP prior, `Pr(c_i = j) ∝ f(d_ij)` for `j ≠ i` and
+`∝ α` for `j = i`. The proposal ratio then cancels the prior ratio exactly, so
+the acceptance probability depends only on the likelihood ratio and the
+parameter proposal, and every proposal lands where the prior has mass.
+"""
+struct PriorLink <: LinkProposal end
