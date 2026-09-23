@@ -25,4 +25,5 @@ include("test_helpers.jl")
     include("test_mcmc_integration.jl")
     include("test_diagnostics.jl")
     include("test_link_proposals.jl")
+    include("test_resample.jl")
 end
