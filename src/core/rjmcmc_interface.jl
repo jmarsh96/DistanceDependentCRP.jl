@@ -206,8 +206,10 @@ end
     fixed_dim_param(model, vname::Val{name}, proposal::Resample, ...)
 
 Stochastically resample a parameter for the modified clusters by reusing the
-inner birth proposal. Calls `sample_birth_param`/`birth_param_logpdf` on the
-new cluster memberships (remaining depleted and augmented sets).
+inner birth proposal. New values are drawn from the proposal built on the new
+cluster memberships (remaining depleted and augmented sets); the current values
+are scored under the proposal built on the current memberships (`table_depl`,
+`table_aug`), which is what the reverse move would use.
 """
 function fixed_dim_param(model::LikelihoodModel, vname::Val{name}, proposal::Resample,
                          S_i::Vector{Int}, table_depl::Vector{Int}, table_aug::Vector{Int},
@@ -219,16 +221,23 @@ function fixed_dim_param(model::LikelihoodModel, vname::Val{name}, proposal::Res
     remaining_depl = sorted_setdiff(table_depl, S_i)
     augmented_aug  = sorted_merge(table_aug, S_i)
 
+    # The reverse move returns S_i from `augmented_aug` to `remaining_depl`, and
+    # would draw the current values from the proposal built on the clusters as
+    # they are now: `table_aug` (without S_i) and `table_depl` (with S_i). The
+    # reverse densities must therefore be evaluated on those memberships, not on
+    # the proposed ones, or the Hastings ratio is wrong whenever the inner
+    # proposal depends on the data.
+
     # Augmented cluster: always resample
     val_aug_new, lq_fwd_aug = sample_birth_param(model, vname, inner, augmented_aug, state, data, priors)
     val_aug_old = dicts[name][table_aug]
-    lq_rev_aug  = birth_param_logpdf(model, vname, inner, val_aug_old, augmented_aug, state, data, priors)
+    lq_rev_aug  = birth_param_logpdf(model, vname, inner, val_aug_old, table_aug, state, data, priors)
 
     # Depleted cluster: resample only if non-empty, otherwise keep value
     if !isempty(remaining_depl)
         val_depl_new, lq_fwd_depl = sample_birth_param(model, vname, inner, remaining_depl, state, data, priors)
         val_depl_old = dicts[name][table_depl]
-        lq_rev_depl  = birth_param_logpdf(model, vname, inner, val_depl_old, remaining_depl, state, data, priors)
+        lq_rev_depl  = birth_param_logpdf(model, vname, inner, val_depl_old, table_depl, state, data, priors)
     else
         val_depl_new = dicts[name][table_depl]
         lq_fwd_depl  = 0.0
