@@ -1,0 +1,138 @@
+# ============================================================================
+# Auxiliary-variable Gibbs update for customer assignments (Neal's Algorithm 8)
+# ============================================================================
+
+using StatsBase
+
+sample_birth_params(model::LikelihoodModel, p::AuxiliaryGibbs, S_i::Vector{Int},
+                    state::AbstractMCMCState, data::AbstractObservedData, priors::AbstractPriors) =
+    sample_birth_params(model, p.proposal, S_i, state, data, priors)
+
+birth_params_logpdf(model::LikelihoodModel, p::AuxiliaryGibbs, params_old::NamedTuple,
+                    S_i::Vector{Int}, state::AbstractMCMCState, data::AbstractObservedData,
+                    priors::AbstractPriors) =
+    birth_params_logpdf(model, p.proposal, params_old, S_i, state, data, priors)
+
+"""
+    contribution_with(model, table, params, state, data, priors)
+
+`table_contribution` of `table` with cluster parameters `params`, inserting the
+key into the parameter dicts for the evaluation and restoring them afterwards.
+"""
+function contribution_with(model::LikelihoodModel, table::Vector{Int}, params::NamedTuple,
+                           state::AbstractMCMCState, data::AbstractObservedData,
+                           priors::AbstractPriors)
+    dicts = cluster_param_dicts(state)
+    had = haskey(first(dicts), table)
+    saved = had ? map(d -> d[table], dicts) : nothing
+    for k in keys(dicts)
+        dicts[k][table] = params[k]
+    end
+    lc = table_contribution(model, table, state, data, priors)
+    for k in keys(dicts)
+        had ? (dicts[k][table] = saved[k]) : delete!(dicts[k], table)
+    end
+    return lc
+end
+
+function _logsumexp(x::AbstractVector{Float64})
+    mx = maximum(x)
+    isfinite(mx) || return mx
+    return mx + log(sum(exp(v - mx) for v in x))
+end
+
+function update_c_i!(
+    model::LikelihoodModel,
+    i::Int,
+    state::AbstractMCMCState,
+    data::AbstractObservedData,
+    priors::AbstractPriors,
+    log_DDCRP::AbstractMatrix,
+    p::AuxiliaryGibbs,
+    ::FixedDimensionProposal,
+    ::LinkProposal,
+    ::StandardUpdate
+)
+    n = length(state.c)
+    dicts = cluster_param_dicts(state)
+    primary = first(dicts)
+
+    table_O = find_table_for_customer(i, primary)
+    M = get_moving_set(i, state.c, table_O)
+    R = sorted_setdiff(table_O, M)
+    own = isempty(R)
+    ρ_O = map(d -> d[table_O], dicts)
+
+    # Blocks other than M; R, if non-empty, is last and carries ρ_O
+    blocks = Vector{Vector{Int}}()
+    for B in keys(primary)
+        B == table_O || push!(blocks, B)
+    end
+    own || push!(blocks, R)
+    L = length(blocks)
+
+    # log p(y_M | ρ_B)
+    logw = Vector{Float64}(undef, L)
+    for l in 1:L
+        B = blocks[l]
+        if !own && l == L
+            logw[l] = table_contribution(model, table_O, state, data, priors) -
+                      contribution_with(model, R, ρ_O, state, data, priors)
+        else
+            ρ_B = map(d -> d[B], dicts)
+            logw[l] = contribution_with(model, sorted_merge(M, B), ρ_B, state, data, priors) -
+                      table_contribution(model, B, state, data, priors)
+        end
+    end
+
+    # Auxiliaries; the current ρ_M takes a random slot when M is on its own
+    m = p.m
+    aux = Vector{typeof(ρ_O)}(undef, m)
+    a = Vector{Float64}(undef, m)
+    h_cur = own ? rand(1:m) : 0
+    for t in 1:m
+        if t == h_cur
+            aux[t] = ρ_O
+            log_q = birth_params_logpdf(model, p.proposal, ρ_O, M, state, data, priors)
+        else
+            aux[t], log_q = sample_birth_params(model, p.proposal, M, state, data, priors)
+        end
+        a[t] = contribution_with(model, M, aux[t], state, data, priors) - log_q
+        isnan(a[t]) && (a[t] = -Inf)
+    end
+    log_aux = _logsumexp(a) - log(m)
+
+    lab = zeros(Int, n)                 # 0 for j ∈ M
+    for l in 1:L, j in blocks[l]
+        lab[j] = l
+    end
+    logp = Vector{Float64}(undef, n)
+    @inbounds for j in 1:n
+        logp[j] = log_DDCRP[i, j] + (lab[j] == 0 ? log_aux : logw[lab[j]])
+    end
+    mx = maximum(logp)
+    j_new = sample(1:n, Weights(exp.(logp .- mx)))
+    l = lab[j_new]
+
+    if l == 0
+        h = sample(1:m, Weights(exp.(a .- maximum(a))))
+        for k in keys(dicts)
+            delete!(dicts[k], table_O)
+            dicts[k][M] = aux[h][k]
+            own || (dicts[k][R] = ρ_O[k])
+        end
+    elseif !(!own && l == L)
+        B = blocks[l]
+        MB = sorted_merge(M, B)
+        ρ_B = map(d -> d[B], dicts)
+        for k in keys(dicts)
+            delete!(dicts[k], table_O)
+            delete!(dicts[k], B)
+            dicts[k][MB] = ρ_B[k]
+            own || (dicts[k][R] = ρ_O[k])
+        end
+    end                                 # j ∈ R: unchanged
+    state.c[i] = j_new
+
+    return (:gibbs, j_new, true)
+end

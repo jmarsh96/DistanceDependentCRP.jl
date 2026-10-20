@@ -60,6 +60,7 @@ InverseGammaMomentMatch
 LogNormalMomentMatch
 FixedDistributionProposal
 MixedProposal
+AuxiliaryGibbs
 ```
 
 ## Fixed-Dimension Proposals
@@ -119,6 +120,8 @@ GammaClusterShapeMargSamples
 
 ```@docs
 mcmc
+set_partition!
+contribution_with
 ```
 
 ## Model Interface Methods

@@ -26,4 +26,5 @@ include("test_helpers.jl")
     include("test_diagnostics.jl")
     include("test_link_proposals.jl")
     include("test_resample.jl")
+    include("test_auxiliary_gibbs.jl")
 end
