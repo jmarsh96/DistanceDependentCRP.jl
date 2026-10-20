@@ -210,6 +210,34 @@ struct AuxiliaryGibbs{P<:BirthProposal} <: BirthProposal
     end
 end
 
+"""
+    AuxiliaryMH{P<:BirthProposal} <: BirthProposal
+
+Select the Metropolised form of Algorithm 8 for the links: a reversible jump
+update in which `c_i` is proposed by the link proposal and accepted by
+Metropolis-Hastings, and a move that creates or removes the moving set's own
+cluster weighs `m` auxiliary parameters from `proposal`, the current value
+taking a random slot when it exists. With `m = 1` it is the reversible jump
+update with `NoUpdate()`, as a birth weighs one draw from `q`. Larger `m`
+lowers the variance of the birth and death ratios at `m` likelihood
+evaluations of the moving set, paid only on those moves. A rejected death
+refreshes the moving set's parameter from the pool. The fixed-dimension
+proposal passed to `mcmc` is ignored (clusters keep their parameters).
+
+# Fields
+- `proposal::P`: Birth density `q(· | y_M)`
+- `m::Int`: Number of auxiliary parameters
+"""
+struct AuxiliaryMH{P<:BirthProposal} <: BirthProposal
+    proposal::P
+    m::Int
+    function AuxiliaryMH(proposal::P, m::Int) where {P<:BirthProposal}
+        m >= 1 || throw(ArgumentError("m must be at least 1"))
+        proposal isa Union{AuxiliaryGibbs, AuxiliaryMH} && throw(ArgumentError("nested auxiliary proposal"))
+        new{P}(proposal, m)
+    end
+end
+
 # ============================================================================
 # Fixed-Dimension Proposals for RJMCMC
 # ============================================================================
@@ -449,3 +477,17 @@ the acceptance probability depends only on the likelihood ratio and the
 parameter proposal, and every proposal lands where the prior has mass.
 """
 struct PriorLink <: LinkProposal end
+
+"""
+    MetropolisedPriorLink()
+
+Propose `c_i` from the ddCRP prior restricted to links that change the
+partition, i.e. outside the block of `z(c_{-i})` holding the current link,
+and accept with the ratio `(1 - P(b_old)) / (1 - P(b_new))` of the prior
+masses outside each block (Liu, 1996). Each accepted or rejected move is
+followed by an exact draw of `c_i` within its block, which leaves the
+partition and likelihood unchanged. Every move off the diagonal is at least as
+likely as under `PriorLink`, so it is never worse in the Peskun order.
+Supported by `AuxiliaryMH` only.
+"""
+struct MetropolisedPriorLink <: LinkProposal end

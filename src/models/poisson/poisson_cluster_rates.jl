@@ -228,6 +228,10 @@ function table_contribution(
     return log_lik + log_prior
 end
 
+cluster_logprior(::PoissonClusterRates, params::NamedTuple, priors::PoissonClusterRatesPriors) =
+    (priors.λ_a - 1) * log(params.λ) - priors.λ_b * params.λ +
+    priors.λ_a * log(priors.λ_b) - loggamma(priors.λ_a)
+
 # ============================================================================
 # Posterior
 # ============================================================================

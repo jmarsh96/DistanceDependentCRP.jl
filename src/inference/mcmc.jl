@@ -43,6 +43,22 @@ function propose_link(i::Int, ::Int, log_DDCRP::AbstractMatrix, ::PriorLink)
     return n, 0.0                      # only reachable through rounding
 end
 
+function propose_link(i::Int, ::Int, L::DDCRPMatrix, ::PriorLink)
+    return sample_link(L, i, L.offsum[i] + L.wt[i, i]), 0.0
+end
+
+# Draw j with probability ∝ wt[j, i] from the cached weights, whose total is `total`
+function sample_link(L::DDCRPMatrix, i::Int, total::Float64)
+    w = view(L.wt, :, i)
+    u = rand() * total
+    acc = 0.0
+    @inbounds for j in eachindex(w)
+        acc += w[j]
+        acc >= u && return j
+    end
+    return length(w)                   # only reachable through rounding
+end
+
 # ============================================================================
 # update_c! - Generic assignment update dispatcher
 # ============================================================================
@@ -506,12 +522,7 @@ function mcmc(
     D = distance_matrix(data)
 
     # Precompute DDCRP matrix
-    log_DDCRP = precompute_log_ddcrp(
-        ddcrp_params.decay_fn,
-        ddcrp_params.α,
-        ddcrp_params.scale,
-        D
-    )
+    log_DDCRP = DDCRPMatrix(ddcrp_params.decay_fn, ddcrp_params.α, ddcrp_params.scale, D)
 
     # Initialize state (dispatches on model type)
     state = initialise_state(model, data, ddcrp_params, priors)
@@ -540,6 +551,7 @@ function mcmc(
     infer_s = should_infer(opts, :s_ddcrp) && !isnothing(ddcrp_params.s_a)
     infer_ddcrp = infer_α || infer_s
     V = infer_ddcrp ? zeros(n) : Float64[]
+    R = infer_ddcrp ? compute_R(s_current, D) : Float64[]   # depends on s only
     samples.α_ddcrp[1] = α_current
     samples.s_ddcrp[1] = s_current
 
@@ -558,7 +570,7 @@ function mcmc(
 
         # Update DDCRP hyperparameters if requested
         if infer_ddcrp
-            R = compute_R(s_current, D)
+            infer_s && (R = compute_R(s_current, D))
             sample_V!(V, α_current, R)
             if infer_α
                 n_self = count_self_links(state.c)
@@ -572,7 +584,8 @@ function mcmc(
                     s_current = update_s_ddcrp(s_current, α_current, state.c, D, ddcrp_params, prop_sd_s)
                 end
             end
-            log_DDCRP = precompute_log_ddcrp(ddcrp_params.decay_fn, α_current, s_current, D)
+            log_DDCRP = infer_s ? DDCRPMatrix(ddcrp_params.decay_fn, α_current, s_current, D) :
+                                  set_alpha!(log_DDCRP, α_current)
         end
 
         # Record diagnostics if returned

@@ -61,6 +61,7 @@ LogNormalMomentMatch
 FixedDistributionProposal
 MixedProposal
 AuxiliaryGibbs
+AuxiliaryMH
 ```
 
 ## Fixed-Dimension Proposals
@@ -71,6 +72,15 @@ NoUpdate
 WeightedMean
 Resample
 MixedFixedDim
+```
+
+## Link Proposals
+
+```@docs
+LinkProposal
+UniformLink
+PriorLink
+MetropolisedPriorLink
 ```
 
 ## Poisson Models
@@ -122,6 +132,7 @@ GammaClusterShapeMargSamples
 mcmc
 set_partition!
 contribution_with
+cluster_logprior
 ```
 
 ## Model Interface Methods
@@ -150,6 +161,8 @@ decay
 construct_distance_matrix
 simulate_ddcrp
 precompute_log_ddcrp
+DDCRPMatrix
+set_alpha!
 ddcrp_contribution
 compute_table_assignments
 table_assignments_to_vector

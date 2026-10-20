@@ -35,6 +35,26 @@ function contribution_with(model::LikelihoodModel, table::Vector{Int}, params::N
     return lc
 end
 
+"""
+    cluster_logprior(model, params, priors)
+
+Log prior density of one cluster's parameters, or `nothing` (the default). A
+model that defines it declares that its `table_contribution` is
+`Σ_{i ∈ table} log f(y_i | params) + cluster_logprior(model, params, priors)`,
+which lets the auxiliary samplers score a moving set under a cluster's
+parameters in O(|M|) instead of through contributions of the whole cluster.
+"""
+cluster_logprior(::LikelihoodModel, params, priors) = nothing
+
+# log p(y_M | ρ) for the moving set M joining block B, whose parameters are ρ
+function moving_set_loglik(model::LikelihoodModel, M::Vector{Int}, ρ::NamedTuple, B::Vector{Int},
+                           state::AbstractMCMCState, data::AbstractObservedData, priors::AbstractPriors)
+    lp = cluster_logprior(model, ρ, priors)
+    isnothing(lp) || return contribution_with(model, M, ρ, state, data, priors) - lp
+    return contribution_with(model, sorted_merge(M, B), ρ, state, data, priors) -
+           contribution_with(model, B, ρ, state, data, priors)
+end
+
 function _logsumexp(x::AbstractVector{Float64})
     mx = maximum(x)
     isfinite(mx) || return mx
@@ -75,14 +95,8 @@ function update_c_i!(
     logw = Vector{Float64}(undef, L)
     for l in 1:L
         B = blocks[l]
-        if !own && l == L
-            logw[l] = table_contribution(model, table_O, state, data, priors) -
-                      contribution_with(model, R, ρ_O, state, data, priors)
-        else
-            ρ_B = map(d -> d[B], dicts)
-            logw[l] = contribution_with(model, sorted_merge(M, B), ρ_B, state, data, priors) -
-                      table_contribution(model, B, state, data, priors)
-        end
+        ρ_B = !own && l == L ? ρ_O : map(d -> d[B], dicts)
+        logw[l] = moving_set_loglik(model, M, ρ_B, B, state, data, priors)
     end
 
     # Auxiliaries; the current ρ_M takes a random slot when M is on its own
