@@ -421,6 +421,34 @@ function update_c_i!(
 end
 
 # ============================================================================
+# Starting partition
+# ============================================================================
+
+"""
+    set_partition!(model, state, c, data, priors, init_proposal)
+
+Set the links of `state` to `c` and give each cluster parameters drawn from
+`init_proposal` built on its members. Models without cluster parameter dicts
+(the marginalised ones) only have their links set.
+"""
+function set_partition!(model::LikelihoodModel, state::AbstractMCMCState, c::Vector{Int},
+                        data::AbstractObservedData, priors::AbstractPriors,
+                        init_proposal::BirthProposal)
+    length(c) == length(state.c) || throw(DimensionMismatch("init_c has the wrong length"))
+    state.c = copy(c)
+    applicable(cluster_param_dicts, state) || return state
+    dicts = cluster_param_dicts(state)
+    foreach(empty!, dicts)
+    for table in table_vector(state.c)
+        params, _ = sample_birth_params(model, init_proposal, table, state, data, priors)
+        for k in keys(dicts)
+            dicts[k][table] = params[k]
+        end
+    end
+    return state
+end
+
+# ============================================================================
 # Generic MCMC Entry Point
 # ============================================================================
 
@@ -439,6 +467,9 @@ Main MCMC entry point. Dispatches based on model type.
 # Keyword Arguments
 - `fixed_dim_proposal::FixedDimensionProposal`: Fixed-dimension proposal (default: `NoUpdate()`)
 - `opts::MCMCOptions`: MCMC configuration
+- `init_c::Union{Nothing, Vector{Int}}`: Starting links; cluster parameters are then drawn
+  from `init_proposal` (see `set_partition!`). Default: a draw from the ddCRP prior.
+- `init_proposal::BirthProposal`: Proposal for the starting cluster parameters (default: `proposal`)
 
 # Returns
 - Model-specific `*Samples` struct (subtype of `AbstractMCMCSamples`)
@@ -453,7 +484,9 @@ function mcmc(
     fixed_dim_proposal::FixedDimensionProposal = NoUpdate(),
     opts::MCMCOptions = MCMCOptions(),
     init_params::Union{Nothing, Dict{Symbol,Any}} = nothing,
-    missing_mask::Union{Nothing, BitVector} = nothing
+    missing_mask::Union{Nothing, BitVector} = nothing,
+    init_c::Union{Nothing, Vector{Int}} = nothing,
+    init_proposal::BirthProposal = proposal
 )
     # Validate data matches model requirements
     if requires_trials(model) && !has_trials(data)
@@ -487,6 +520,7 @@ function mcmc(
             setfield!(state, k, v isa AbstractArray ? copy(v) : v)
         end
     end
+    isnothing(init_c) || set_partition!(model, state, init_c, data, priors, init_proposal)
 
     # Allocate sample storage (dispatches on model type)
     samples = allocate_samples(model, opts.n_samples, n)
@@ -580,10 +614,10 @@ function mcmc(model::LikelihoodModel, y::AbstractVector, D::AbstractMatrix,
               ddcrp_params::DDCRPParams, priors::AbstractPriors,
               proposal::BirthProposal = PriorProposal();
               fixed_dim_proposal::FixedDimensionProposal = NoUpdate(),
-              opts::MCMCOptions = MCMCOptions())
+              opts::MCMCOptions = MCMCOptions(), kwargs...)
     data = CountData(y, D)
     return mcmc(model, data, ddcrp_params, priors, proposal;
-                fixed_dim_proposal=fixed_dim_proposal, opts=opts)
+                fixed_dim_proposal=fixed_dim_proposal, opts=opts, kwargs...)
 end
 
 """Convenience: CountDataWithTrials models (Binomial) or CountDataWithPopulation models with separate y, N/P, D."""
@@ -592,7 +626,8 @@ function mcmc(model::LikelihoodModel, y_::AbstractVector, N::Union{<:Real, <:Abs
               proposal::BirthProposal = PriorProposal();
               fixed_dim_proposal::FixedDimensionProposal = NoUpdate(),
               opts::MCMCOptions = MCMCOptions(),
-              init_params::Union{Nothing, Dict{Symbol,Any}} = nothing
+              init_params::Union{Nothing, Dict{Symbol,Any}} = nothing,
+              kwargs...
 )
     missing_mask = BitVector(ismissing.(y_))
     y = Int.(coalesce.(y_, 0))  # 0 placeholder for missing; filtered in table_contribution
@@ -606,7 +641,8 @@ function mcmc(model::LikelihoodModel, y_::AbstractVector, N::Union{<:Real, <:Abs
         fixed_dim_proposal=fixed_dim_proposal,
         opts=opts,
         init_params=init_params,
-        missing_mask=missing_mask
+        missing_mask=missing_mask,
+        kwargs...
     )
 end
 
@@ -615,8 +651,8 @@ function mcmc(model::GammaModel, y::AbstractVector{<:Real},
               D::AbstractMatrix, ddcrp_params::DDCRPParams, priors::AbstractPriors,
               proposal::BirthProposal = PriorProposal();
               fixed_dim_proposal::FixedDimensionProposal = NoUpdate(),
-              opts::MCMCOptions = MCMCOptions())
+              opts::MCMCOptions = MCMCOptions(), kwargs...)
     data = ContinuousData(y, D)
     return mcmc(model, data, ddcrp_params, priors, proposal;
-                fixed_dim_proposal=fixed_dim_proposal, opts=opts)
+                fixed_dim_proposal=fixed_dim_proposal, opts=opts, kwargs...)
 end

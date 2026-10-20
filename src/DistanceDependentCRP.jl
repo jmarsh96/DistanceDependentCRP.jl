@@ -32,6 +32,7 @@ export get_missing_mask, has_missing
 export PriorProposal, ConjugateProposal, MomentMatchedProposal
 export NormalMomentMatch, InverseGammaMomentMatch, LogNormalMomentMatch
 export FixedDistributionProposal, MixedProposal
+export AuxiliaryGibbs, set_partition!, contribution_with
 
 # Fixed-dimension proposals for RJMCMC
 export FixedDimensionProposal, NoUpdate, WeightedMean, Resample, MixedFixedDim
@@ -147,6 +148,7 @@ include("models/gamma/gamma_cluster_shape_marg.jl")
 # Samplers (depends on model types for specialized methods)
 include("samplers/gibbs.jl")
 include("samplers/rjmcmc.jl")
+include("samplers/auxiliary_gibbs.jl")
 
 # MCMC loop (depends on models and samplers)
 include("inference/mcmc.jl")

@@ -181,6 +181,35 @@ struct MixedProposal{T<:NamedTuple} <: BirthProposal
 end
 MixedProposal(; kwargs...) = MixedProposal(NamedTuple(kwargs))
 
+"""
+    AuxiliaryGibbs{P<:BirthProposal} <: BirthProposal
+
+Select the auxiliary-variable Gibbs update for the links: the ddCRP form of
+Algorithm 8 of Neal (2000). Each `c_i` is drawn from its full conditional over
+all `n` values, with `m` auxiliary parameters for the moving set drawn from
+`proposal` and weighted by prior/proposal. With `proposal = PriorProposal()`
+this is Neal's original algorithm. The fixed-dimension and link proposals
+passed to `mcmc` are ignored.
+
+# Fields
+- `proposal::P`: Density `q(· | y_M)` for the auxiliary parameters
+- `m::Int`: Number of auxiliary parameters
+
+# Example
+```julia
+AuxiliaryGibbs(MixedProposal(ξ = NormalMomentMatch(2.0), ω = LogNormalMomentMatch(1.0)), 3)
+```
+"""
+struct AuxiliaryGibbs{P<:BirthProposal} <: BirthProposal
+    proposal::P
+    m::Int
+    function AuxiliaryGibbs(proposal::P, m::Int) where {P<:BirthProposal}
+        m >= 1 || throw(ArgumentError("m must be at least 1"))
+        proposal isa AuxiliaryGibbs && throw(ArgumentError("nested AuxiliaryGibbs"))
+        new{P}(proposal, m)
+    end
+end
+
 # ============================================================================
 # Fixed-Dimension Proposals for RJMCMC
 # ============================================================================
