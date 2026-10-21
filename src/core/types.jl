@@ -210,6 +210,80 @@ struct AuxiliaryGibbs{P<:BirthProposal} <: BirthProposal
     end
 end
 
+# ============================================================================
+# Coupled-parameter birth/death
+# ============================================================================
+
+"""
+    ContrastProposal
+
+Density `g(u)` of the contrast `u = t_M − t_R` between the two daughter
+parameters of a coupled birth, on the unconstrained scale `t = T(ρ)` of
+`param_scales`. Scales `s` are a number (every coordinate) or a NamedTuple
+keyed by parameter name.
+"""
+abstract type ContrastProposal end
+
+"""
+    FitStudentT(ν, s)
+
+Per-coordinate Student-t with `ν` degrees of freedom and scale `s`, centred at
+`T(fit_M) − T(fit_R)` from `moment_fit` (zero when either fit is unavailable).
+"""
+struct FitStudentT{S} <: ContrastProposal
+    ν::Float64
+    s::S
+end
+
+"""
+    ZeroStudentT(ν, s)
+
+Per-coordinate Student-t with `ν` degrees of freedom and scale `s`, centred at zero.
+"""
+struct ZeroStudentT{S} <: ContrastProposal
+    ν::Float64
+    s::S
+end
+
+"""
+    FitNormal(s)
+
+Per-coordinate Normal with scale `s`, centred as in `FitStudentT`.
+"""
+struct FitNormal{S} <: ContrastProposal
+    s::S
+end
+
+"""
+    Coupled(contrast, p)
+
+A coupled-parameter birth/death, used on a birth or death with probability `p`
+(the original move otherwise). A birth splits the original cluster `O` into
+the remainder `R` and the moving set `M` with `t_R = t_O − (|M|/|O|) u` and
+`t_M = t_O + (|R|/|O|) u`, `u ~ g`; a death merges `M` into `B` with the
+inverse map. The map has unit Jacobian on the unconstrained scale, and each
+cluster factor carries its own `|det DT⁻¹|`.
+"""
+struct Coupled{G<:ContrastProposal}
+    contrast::G
+    p::Float64
+    function Coupled(contrast::G, p::Real = 0.5) where {G<:ContrastProposal}
+        0 < p <= 1 || throw(ArgumentError("p must be in (0, 1]"))
+        new{G}(contrast, float(p))
+    end
+end
+
+"""
+    CoupledRJ(proposal, coupled::Coupled)
+
+Birth proposal for the reversible jump update that adds the coupled birth/death
+of `coupled` to the original birth/death with parameter proposal `proposal`.
+"""
+struct CoupledRJ{P<:BirthProposal, C<:Coupled} <: BirthProposal
+    proposal::P
+    coupled::C
+end
+
 """
     AuxiliaryMH{P<:BirthProposal} <: BirthProposal
 
@@ -227,14 +301,58 @@ proposal passed to `mcmc` is ignored (clusters keep their parameters).
 # Fields
 - `proposal::P`: Birth density `q(· | y_M)`
 - `m::Int`: Number of auxiliary parameters
+- `coupled`: `nothing`, or a `Coupled` move mixed into births and deaths (keyword)
 """
-struct AuxiliaryMH{P<:BirthProposal} <: BirthProposal
+struct AuxiliaryMH{P<:BirthProposal, C<:Union{Nothing, Coupled}} <: BirthProposal
     proposal::P
     m::Int
-    function AuxiliaryMH(proposal::P, m::Int) where {P<:BirthProposal}
+    coupled::C
+    function AuxiliaryMH(proposal::P, m::Int; coupled::C = nothing) where {P<:BirthProposal, C<:Union{Nothing, Coupled}}
         m >= 1 || throw(ArgumentError("m must be at least 1"))
-        proposal isa Union{AuxiliaryGibbs, AuxiliaryMH} && throw(ArgumentError("nested auxiliary proposal"))
-        new{P}(proposal, m)
+        proposal isa Union{AuxiliaryGibbs, AuxiliaryMH, CoupledRJ} && throw(ArgumentError("nested auxiliary proposal"))
+        new{P, C}(proposal, m, coupled)
+    end
+end
+
+# ============================================================================
+# Two-anchor multi-link split/merge
+# ============================================================================
+
+"""
+    TwoAnchor(; k = 3.0, attempts = 1, pilot = false, tilt = 1.0, p_cross = 0.9)
+
+An occasional multi-link split/merge (pass as `MCMCOptions(two_anchor = ...)`):
+`attempts` times per sweep an ordered pair of distinct anchors `(a, b)` is drawn
+uniformly; `U` is the union of their clusters. Every `i ∈ U` redraws its link
+with probability `p = min(0.5, k/|U|)` from the ddCRP weights restricted to `U`,
+and the proposal is a split (anchors together) if it leaves exactly two
+components with `a` and `b` apart, or a merge (anchors apart) if it leaves one;
+any other topology is a rejection. The cluster holding `a` keeps its parameter;
+a split draws the other's from the birth proposal. Exact for any base update
+with explicit cluster parameters.
+
+With `pilot = true` the links are guided by a deterministic two-way grouping of
+`U` built from the anchors and the data only (`two_anchor_pilot`), so it is the
+same in both directions. Each `i` redraws its link with probability
+`max(p, p_cross · s_i)`, where `s_i` is the share of its link weight in the
+other pilot group, so the redraws concentrate on the pilot boundary. With
+`tilt = 1` (the default) targets are the ddCRP weights and the link terms of
+the ratio cancel; `tilt > 1` favours same-group targets on a split and
+other-group targets on a merge. Every target in `U` keeps positive probability.
+"""
+struct TwoAnchor
+    k::Float64
+    attempts::Int
+    pilot::Bool
+    tilt::Float64
+    p_cross::Float64
+    function TwoAnchor(; k::Real = 3.0, attempts::Int = 1, pilot::Bool = false, tilt::Real = 1.0,
+                       p_cross::Real = 0.9)
+        k > 0 || throw(ArgumentError("k must be positive"))
+        attempts >= 1 || throw(ArgumentError("attempts must be at least 1"))
+        tilt > 0 || throw(ArgumentError("tilt must be positive"))
+        0 < p_cross < 1 || throw(ArgumentError("p_cross must be in (0, 1)"))
+        new(float(k), attempts, pilot, float(tilt), float(p_cross))
     end
 end
 
@@ -491,3 +609,24 @@ likely as under `PriorLink`, so it is never worse in the Peskun order.
 Supported by `AuxiliaryMH` only.
 """
 struct MetropolisedPriorLink <: LinkProposal end
+
+"""
+    InformedLink(ε = 0.1, τ = 1.0)
+
+Propose `c_i` by first choosing a block `b` of `z(c_{-i})` with probability
+`(1−ε) softmax(τ s)_b + ε W_b / Σ W`, then a link within it in proportion to
+its ddCRP weight. The score of an existing block is `log W_b + log p(y_M | ρ_b)`;
+the moving set's own block is scored with a deterministic plug-in
+`log W_M + table_contribution(M; ρ̂) − (d/2) log |M|` at the `moment_fit` (or
+prior-mean) parameters. Block parameters are unchanged by the move, so the
+forward and reverse proposals share one score vector. Requires `NoUpdate()`
+and no `Coupled` move.
+"""
+struct InformedLink <: LinkProposal
+    ε::Float64
+    τ::Float64
+    function InformedLink(ε::Real = 0.1, τ::Real = 1.0)
+        0 < ε <= 1 || throw(ArgumentError("ε must be in (0, 1]"))
+        new(float(ε), float(τ))
+    end
+end

@@ -196,12 +196,52 @@ function update_c_i!(
     # Under UniformLink the returned delta is the change in the log prior, which
     # is O(1) since only c[i] moves; under PriorLink it is zero, the proposal
     # ratio having cancelled the prior ratio.
-    j_star, ddcrp_delta = propose_link(i, j_old, log_DDCRP, link_proposal)
+    if link_proposal isa InformedLink
+        _check_informed(link_proposal, proposal, fixed_dim_proposal)
+        R = sorted_setdiff(table_Si, S_i)
+        j_star, ddcrp_delta = informed_link_proposal(model, i, S_i, R, table_Si,
+            map(d -> d[table_Si], dicts), state, data, priors, log_DDCRP, link_proposal)
+    else
+        j_star, ddcrp_delta = propose_link(i, j_old, log_DDCRP, link_proposal)
+    end
+    cp = _coupled(proposal)
 
     j_old_in_Si = j_old in S_i
     j_star_in_Si = j_star in S_i
 
-    if !j_old_in_Si && j_star_in_Si
+    if !j_old_in_Si && j_star_in_Si && !isnothing(cp) && rand() < cp.p
+        # ===== COUPLED BIRTH =====
+        table_l = sorted_setdiff(table_Si, S_i)
+        ρ_O = map(d -> d[table_Si], dicts)
+        lr, ρ_R, ρ_M = coupled_birth_ratio(model, S_i, table_l, ρ_O, table_Si, cp, state, data, priors)
+        accepted = log(rand()) < lr + ddcrp_delta
+        if accepted
+            state.c[i] = j_star
+            for k in keys(dicts)
+                delete!(dicts[k], table_Si)
+                dicts[k][table_l] = ρ_R[k]
+                dicts[k][S_i] = ρ_M[k]
+            end
+        end
+        return (:coupled_birth, j_star, accepted)
+
+    elseif j_old_in_Si && !j_star_in_Si && !isnothing(cp) && rand() < cp.p
+        # ===== COUPLED DEATH =====
+        table_target = find_table_for_customer(j_star, primary_dict)
+        lr, merged, ρ_new = coupled_death_ratio(model, S_i, table_target, map(d -> d[table_Si], dicts),
+                                                map(d -> d[table_target], dicts), cp, state, data, priors)
+        accepted = log(rand()) < lr + ddcrp_delta
+        if accepted
+            state.c[i] = j_star
+            for k in keys(dicts)
+                delete!(dicts[k], table_Si)
+                delete!(dicts[k], table_target)
+                dicts[k][merged] = ρ_new[k]
+            end
+        end
+        return (:coupled_death, j_star, accepted)
+
+    elseif !j_old_in_Si && j_star_in_Si
         # ===== BIRTH MOVE =====
         # Sample birth params before modifying state
         params_new, log_q_forward = sample_birth_params(model, proposal, S_i, state, data, priors)
@@ -534,11 +574,14 @@ function mcmc(
     isnothing(init_c) || set_partition!(model, state, init_c, data, priors, init_proposal)
 
     # Allocate sample storage (dispatches on model type)
-    samples = allocate_samples(model, opts.n_samples, n)
+    opts.thin >= 1 || throw(ArgumentError("thin must be at least 1"))
+    samples = allocate_samples(model, cld(opts.n_samples, opts.thin), n)
 
     # Initialize diagnostics
     diag = opts.track_diagnostics ?
            MCMCDiagnostics(n; track_pairwise=opts.track_pairwise) : nothing
+
+    ta_stats = isnothing(diag) ? TwoAnchorStats() : diag.two_anchor
 
     # Store initial state
     extract_samples!(model, state, samples, 1)
@@ -567,6 +610,13 @@ function mcmc(
 
         # Update customer assignments (gibbs or rjmcmc based on model/proposal)
         result = update_c!(model, state, data, priors, proposal, fixed_dim_proposal, log_DDCRP, opts, effective_mask)
+
+        # Optional two-anchor multi-link split/merge
+        if !isnothing(opts.two_anchor) && should_infer(opts, :c)
+            for _ in 1:opts.two_anchor.attempts
+                two_anchor_update!(model, state, data, priors, log_DDCRP, proposal, opts.two_anchor, ta_stats)
+            end
+        end
 
         # Update DDCRP hyperparameters if requested
         if infer_ddcrp
@@ -598,11 +648,14 @@ function mcmc(
             end
         end
 
-        # Store samples
-        extract_samples!(model, state, samples, iter)
-        samples.logpost[iter] = posterior(model, data, state, priors, log_DDCRP)
-        samples.α_ddcrp[iter] = α_current
-        samples.s_ddcrp[iter] = s_current
+        # Store every `thin`-th iteration (the first is the initial state)
+        if (iter - 1) % opts.thin == 0
+            r = (iter - 1) ÷ opts.thin + 1
+            extract_samples!(model, state, samples, r)
+            samples.logpost[r] = posterior(model, data, state, priors, log_DDCRP)
+            samples.α_ddcrp[r] = α_current
+            samples.s_ddcrp[r] = s_current
+        end
 
         # Progress
         if opts.verbose && (iter % 100 == 0 || iter == 1)

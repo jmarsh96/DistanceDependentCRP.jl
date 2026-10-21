@@ -121,6 +121,12 @@ end
 # ============================================================================
 
 cluster_param_dicts(state::GammaClusterShapeMargState) = (α = state.α_dict,)
+param_scales(::GammaClusterShapeMarg) = (α = :log,)
+prior_mean_params(::GammaClusterShapeMarg, priors::GammaClusterShapeMargPriors) = (α = priors.α_a / priors.α_b,)
+function moment_fit(::GammaClusterShapeMarg, S::Vector{Int}, data::ContinuousData, priors::GammaClusterShapeMargPriors)
+    α̂ = fit_gamma_shape_moments(view(observations(data), S))
+    return isnothing(α̂) ? nothing : (α = max(α̂, 0.01),)
+end
 
 # --- PriorProposal ---
 function sample_birth_params(::GammaClusterShapeMarg, ::PriorProposal, S_i::Vector{Int}, state::GammaClusterShapeMargState, data::ContinuousData, priors::GammaClusterShapeMargPriors)

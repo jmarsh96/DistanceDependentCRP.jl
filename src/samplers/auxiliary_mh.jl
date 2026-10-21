@@ -103,6 +103,10 @@ function update_c_i!(
             return (:fixed, state.c[i], true)
         end
         j_star = _sample_outside(w, b_old, out_old)
+    elseif link isa InformedLink
+        _check_informed(link, p, NoUpdate())
+        j_star, corr = informed_link_proposal(model, i, M, R, table_O, ρ_O, state, data, priors,
+                                              log_DDCRP, link)
     else
         j_star, corr = propose_link(i, j_old, log_DDCRP, link)
     end
@@ -131,6 +135,27 @@ function update_c_i!(
             for k in keys(dicts)
                 delete!(dicts[k], table_O); delete!(dicts[k], B)
                 dicts[k][R] = ρ_O[k]; dicts[k][MB] = ρ_B[k]
+            end
+        end
+    elseif !own && !isnothing(p.coupled) && rand() < p.coupled.p
+        lr, ρ_R, ρ_M = coupled_birth_ratio(model, M, R, ρ_O, table_O, p.coupled, state, data, priors)
+        move = :coupled_birth
+        accepted = log(rand()) < lr + corr
+        if accepted
+            for k in keys(dicts)
+                delete!(dicts[k], table_O)
+                dicts[k][R] = ρ_R[k]; dicts[k][M] = ρ_M[k]
+            end
+        end
+    elseif own && !isnothing(p.coupled) && rand() < p.coupled.p
+        lr, MB, ρ_new = coupled_death_ratio(model, M, B, ρ_O, map(d -> d[B], dicts), p.coupled,
+                                            state, data, priors)
+        move = :coupled_death
+        accepted = log(rand()) < lr + corr
+        if accepted
+            for k in keys(dicts)
+                delete!(dicts[k], M); delete!(dicts[k], B)
+                dicts[k][MB] = ρ_new[k]
             end
         end
     elseif !own

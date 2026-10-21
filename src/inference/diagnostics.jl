@@ -6,6 +6,29 @@
 using Statistics
 
 """
+    TwoAnchorStats
+
+Counts for the two-anchor move, separately for splits and merges: attempts,
+invalid topologies (with the component counts they produced), MH acceptances,
+and the number of links changed by each valid proposal and each accepted move.
+"""
+mutable struct TwoAnchorStats
+    split_attempts::Int
+    split_invalid::Int
+    split_accepts::Int
+    merge_attempts::Int
+    merge_invalid::Int
+    merge_accepts::Int
+    invalid_components::Dict{Int, Int}
+    valid_links_changed::Vector{Int}
+    split_accepted_links::Vector{Int}
+    merge_accepted_links::Vector{Int}
+    U_size_sum::Int
+    time::Float64
+end
+TwoAnchorStats() = TwoAnchorStats(0, 0, 0, 0, 0, 0, Dict{Int, Int}(), Int[], Int[], Int[], 0, 0.0)
+
+"""
     MCMCDiagnostics
 
 Container for MCMC diagnostic information including move-type acceptance
@@ -19,6 +42,11 @@ mutable struct MCMCDiagnostics
     death_accepts::Int
     fixed_proposes::Int
     fixed_accepts::Int
+    coupled_birth_proposes::Int
+    coupled_birth_accepts::Int
+    coupled_death_proposes::Int
+    coupled_death_accepts::Int
+    two_anchor::TwoAnchorStats
 
     # Pairwise tracking (optional, can be expensive for large n)
     propose_matrix::Union{Matrix{Int}, Nothing}
@@ -32,7 +60,7 @@ end
 function MCMCDiagnostics(n::Int; track_pairwise::Bool=false)
     pm = track_pairwise ? zeros(Int, n, n) : nothing
     am = track_pairwise ? zeros(Int, n, n) : nothing
-    MCMCDiagnostics(0, 0, 0, 0, 0, 0, pm, am, time(), 0.0)
+    MCMCDiagnostics(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, TwoAnchorStats(), pm, am, time(), 0.0)
 end
 
 """
@@ -41,6 +69,15 @@ end
 Record a proposed move and whether it was accepted.
 """
 function record_move!(diag::MCMCDiagnostics, move_type::Symbol, accepted::Bool)
+    if move_type == :coupled_birth
+        diag.coupled_birth_proposes += 1
+        accepted && (diag.coupled_birth_accepts += 1)
+        move_type = :birth
+    elseif move_type == :coupled_death
+        diag.coupled_death_proposes += 1
+        accepted && (diag.coupled_death_accepts += 1)
+        move_type = :death
+    end
     if move_type == :birth
         diag.birth_proposes += 1
         accepted && (diag.birth_accepts += 1)

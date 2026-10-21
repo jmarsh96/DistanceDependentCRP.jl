@@ -33,10 +33,14 @@ export PriorProposal, ConjugateProposal, MomentMatchedProposal
 export NormalMomentMatch, InverseGammaMomentMatch, LogNormalMomentMatch
 export FixedDistributionProposal, MixedProposal
 export AuxiliaryGibbs, AuxiliaryMH, set_partition!, contribution_with, cluster_logprior
+export Coupled, CoupledRJ, ContrastProposal, FitStudentT, ZeroStudentT, FitNormal
+export param_scales, moment_fit, prior_mean_params
+export obs_loglik
+export TwoAnchor, TwoAnchorStats, two_anchor_logQ, two_anchor_logratio, two_anchor_components, two_anchor_pilot, two_anchor_draw
 
 # Fixed-dimension proposals for RJMCMC
 export FixedDimensionProposal, NoUpdate, WeightedMean, Resample, MixedFixedDim
-export LinkProposal, UniformLink, PriorLink, MetropolisedPriorLink
+export LinkProposal, UniformLink, PriorLink, MetropolisedPriorLink, InformedLink
 
 # Poisson model variants
 export PoissonClusterRates, PoissonClusterRatesState, PoissonClusterRatesPriors, PoissonClusterRatesSamples
@@ -150,6 +154,8 @@ include("samplers/gibbs.jl")
 include("samplers/rjmcmc.jl")
 include("samplers/auxiliary_gibbs.jl")
 include("samplers/auxiliary_mh.jl")
+include("samplers/coupled.jl")
+include("samplers/two_anchor.jl")
 
 # MCMC loop (depends on models and samplers)
 include("inference/mcmc.jl")

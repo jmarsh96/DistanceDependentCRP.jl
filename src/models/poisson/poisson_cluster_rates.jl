@@ -90,6 +90,12 @@ end
 # ============================================================================
 
 cluster_param_dicts(state::PoissonClusterRatesState) = (λ = state.λ_dict,)
+param_scales(::PoissonClusterRates) = (λ = :log,)
+prior_mean_params(::PoissonClusterRates, priors::PoissonClusterRatesPriors) = (λ = priors.λ_a / priors.λ_b,)
+function moment_fit(::PoissonClusterRates, S::Vector{Int}, data::CountData, priors::PoissonClusterRatesPriors)
+    y = observations(data)
+    return (λ = (priors.λ_a + sum(view(y, S))) / (priors.λ_b + length(S)),)
+end
 
 # --- PriorProposal (samples from conjugate posterior) ---
 function sample_birth_params(::PoissonClusterRates, ::PriorProposal,
@@ -227,6 +233,9 @@ function table_contribution(
 
     return log_lik + log_prior
 end
+
+obs_loglik(::PoissonClusterRates, i::Int, params::NamedTuple, data::CountData) =
+    (y = observations(data)[i]; y * log(params.λ) - params.λ - loggamma(y + 1))
 
 cluster_logprior(::PoissonClusterRates, params::NamedTuple, priors::PoissonClusterRatesPriors) =
     (priors.λ_a - 1) * log(params.λ) - priors.λ_b * params.λ +

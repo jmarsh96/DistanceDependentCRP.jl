@@ -17,6 +17,43 @@ Each model returns its specific set of dicts, e.g.:
 """
 function cluster_param_dicts end
 
+"""
+    param_scales(model) -> NamedTuple
+
+The unconstrained scale of each cluster parameter, `:log` or `:identity`, in the
+order of `cluster_param_dicts`. Used by the coupled birth/death (`Coupled`) and
+the informed link proposal (`InformedLink`).
+"""
+function param_scales end
+
+"""
+    moment_fit(model, S, data, priors) -> NamedTuple or nothing
+
+A deterministic quick fit of one cluster's parameters to the observations `S`
+(a proposal input only), or `nothing` when `S` is too small or the fit fails.
+"""
+function moment_fit end
+
+"""
+    prior_mean_params(model, priors) -> NamedTuple
+
+Prior mean (or another fixed central value) of one cluster's parameters, the
+fallback when `moment_fit` returns `nothing`.
+"""
+function prior_mean_params end
+
+# Unconstrained coordinates t = T(ρ) and back; log |det DT⁻¹(t)| sums the log coordinates
+to_t(model::LikelihoodModel, ρ::NamedTuple) =
+    [s === :log ? log(float(ρ[k])) : float(ρ[k]) for (k, s) in pairs(param_scales(model))]
+
+function from_t(model::LikelihoodModel, t::AbstractVector{<:Real})
+    sc = param_scales(model)
+    return NamedTuple{keys(sc)}(Tuple(s === :log ? exp(t[i]) : t[i] for (i, s) in enumerate(values(sc))))
+end
+
+logjac(model::LikelihoodModel, t::AbstractVector{<:Real}) =
+    sum((t[i] for (i, s) in enumerate(values(param_scales(model))) if s === :log); init = 0.0)
+
 
 """
     sample_birth_params(model::LikelihoodModel, proposal::BirthProposal,

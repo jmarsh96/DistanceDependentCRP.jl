@@ -46,6 +46,15 @@ parameters in O(|M|) instead of through contributions of the whole cluster.
 """
 cluster_logprior(::LikelihoodModel, params, priors) = nothing
 
+"""
+    obs_loglik(model, i, params, data)
+
+`log f(y_i | params)` for one observation, or `nothing` (the default). Optional:
+a fast path for proposal inputs that score observations one at a time (the
+two-anchor pilot); without it they use singleton `table_contribution`s.
+"""
+obs_loglik(::LikelihoodModel, i, params, data) = nothing
+
 # log p(y_M | ρ) for the moving set M joining block B, whose parameters are ρ
 function moving_set_loglik(model::LikelihoodModel, M::Vector{Int}, ρ::NamedTuple, B::Vector{Int},
                            state::AbstractMCMCState, data::AbstractObservedData, priors::AbstractPriors)
