@@ -99,13 +99,38 @@ function update_c_i!(
     end
     own || push!(blocks, R)
     L = length(blocks)
+    ρ_block(l) = !own && l == L ? ρ_O : map(d -> d[blocks[l]], dicts)
 
-    # log p(y_M | ρ_B)
-    logw = Vector{Float64}(undef, L)
+    lab = zeros(Int, n)                 # 0 for j ∈ M
+    for l in 1:L, j in blocks[l]
+        lab[j] = l
+    end
+    w = _link_weights(log_DDCRP, i)     # w[j]: link weight of i → j
+
+    # log p(y_M | ρ_B), NaN until computed
+    logw = fill(NaN, L)
+    lik(l) = isnan(logw[l]) ? (logw[l] = moving_set_loglik(model, M, ρ_block(l), blocks[l], state, data, priors)) : logw[l]
+
+    # Far blocks (link weight below exp(-skip) of the largest) leave the Gibbs draw and are
+    # reached by an MH move between them and the near blocks
+    near = trues(L)
+    if isfinite(p.skip)
+        W = zeros(L + 1)                # L + 1: M
+        @inbounds for j in 1:n
+            W[lab[j] == 0 ? L + 1 : lab[j]] += w[j]
+        end
+        ref = log(maximum(W))
+        for l in 1:L
+            near[l] = log(W[l]) >= ref - p.skip
+        end
+        if !own && !all(near)
+            done, j_new = _cross_far!(model, i, state, M, R, table_O, ρ_O, blocks, lab, near, W, w, lik)
+            done && return (:gibbs, j_new, true)
+            near[L] || return (:gibbs, state.c[i], true)
+        end
+    end
     for l in 1:L
-        B = blocks[l]
-        ρ_B = !own && l == L ? ρ_O : map(d -> d[B], dicts)
-        logw[l] = moving_set_loglik(model, M, ρ_B, B, state, data, priors)
+        near[l] ? lik(l) : (logw[l] = -Inf)
     end
 
     # Auxiliaries; the current ρ_M takes a random slot when M is on its own
@@ -125,16 +150,15 @@ function update_c_i!(
     end
     log_aux = _logsumexp(a) - log(m)
 
-    lab = zeros(Int, n)                 # 0 for j ∈ M
-    for l in 1:L, j in blocks[l]
-        lab[j] = l
-    end
-    logp = Vector{Float64}(undef, n)
+    # p(c_i = j) ∝ w[j] × (likelihood factor of j's block), one exp per block
+    mx = max(log_aux, maximum(logw; init = -Inf))
+    f = exp.(logw .- mx)
+    fM = exp(log_aux - mx)
+    pj = Vector{Float64}(undef, n)
     @inbounds for j in 1:n
-        logp[j] = log_DDCRP[i, j] + (lab[j] == 0 ? log_aux : logw[lab[j]])
+        pj[j] = w[j] * (lab[j] == 0 ? fM : f[lab[j]])
     end
-    mx = maximum(logp)
-    j_new = sample(1:n, Weights(exp.(logp .- mx)))
+    j_new = sample(1:n, Weights(pj))
     l = lab[j_new]
 
     if l == 0
@@ -145,17 +169,49 @@ function update_c_i!(
             own || (dicts[k][R] = ρ_O[k])
         end
     elseif !(!own && l == L)
-        B = blocks[l]
-        MB = sorted_merge(M, B)
-        ρ_B = map(d -> d[B], dicts)
-        for k in keys(dicts)
-            delete!(dicts[k], table_O)
-            delete!(dicts[k], B)
-            dicts[k][MB] = ρ_B[k]
-            own || (dicts[k][R] = ρ_O[k])
-        end
+        _join_block!(dicts, table_O, M, R, ρ_O, blocks[l])
     end                                 # j ∈ R: unchanged
     state.c[i] = j_new
 
     return (:gibbs, j_new, true)
+end
+
+_link_weights(L::DDCRPMatrix, i) = view(L.wt, :, i)
+_link_weights(L::AbstractMatrix, i) = exp.(view(L, i, :))
+
+# M leaves its cluster O (R keeps ρ_O if non-empty) and joins block B with B's parameters
+function _join_block!(dicts, table_O, M, R, ρ_O, B)
+    MB = sorted_merge(M, B)
+    ρ_B = map(d -> d[B], dicts)
+    for k in keys(dicts)
+        delete!(dicts[k], table_O)
+        delete!(dicts[k], B)
+        dicts[k][MB] = ρ_B[k]
+        isempty(R) || (dicts[k][R] = ρ_O[k])
+    end
+end
+
+# MH move of c_i between the near and far existing blocks of c_{-i} (current link in R, the last
+# block): j' is proposed from the link weights on the other side, so the ratio is
+# p(y_M | ρ_B') / p(y_M | ρ_O) × W(proposed side) / W(current side). Returns (accepted, c_i).
+function _cross_far!(model, i, state, M, R, table_O, ρ_O, blocks, lab, near, W, w, lik)
+    L = length(blocks)
+    cur_far = !near[L]
+    W_near = sum(W[l] for l in 1:L if near[l]; init = 0.0)
+    W_far = sum(W[l] for l in 1:L if !near[l]; init = 0.0)
+    W_to = cur_far ? W_near : W_far
+    W_to > 0 || return false, state.c[i]
+    r = rand() * W_to
+    j_new = 0
+    @inbounds for j in eachindex(lab)
+        (lab[j] != 0 && near[lab[j]] == cur_far) || continue
+        j_new = j
+        (r -= w[j]) <= 0 && break
+    end
+    l = lab[j_new]
+    lr = lik(l) - lik(L) + log(W_to) - log(cur_far ? W_far : W_near)
+    log(rand()) < lr || return false, state.c[i]
+    _join_block!(cluster_param_dicts(state), table_O, M, R, ρ_O, blocks[l])
+    state.c[i] = j_new
+    return true, j_new
 end

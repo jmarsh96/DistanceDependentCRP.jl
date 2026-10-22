@@ -191,9 +191,17 @@ all `n` values, with `m` auxiliary parameters for the moving set drawn from
 this is Neal's original algorithm. The fixed-dimension and link proposals
 passed to `mcmc` are ignored.
 
+With a finite `skip`, the existing blocks of `z(c_{-i})` whose total link weight
+from `i` is below `exp(-skip)` times the largest block weight (`M`'s included)
+are left out of the Gibbs draw, so the moving set is scored only under the near
+blocks. The far blocks are reached by a Metropolis-Hastings move between the
+near and far blocks, proposed from the link weights, so the update stays exact.
+This pays when the prior confines links to a neighbourhood (a windowed decay).
+
 # Fields
 - `proposal::P`: Density `q(· | y_M)` for the auxiliary parameters
 - `m::Int`: Number of auxiliary parameters
+- `skip::Float64`: Log weight gap beyond which a block is far (`Inf`: none; keyword)
 
 # Example
 ```julia
@@ -203,10 +211,12 @@ AuxiliaryGibbs(MixedProposal(ξ = NormalMomentMatch(2.0), ω = LogNormalMomentMa
 struct AuxiliaryGibbs{P<:BirthProposal} <: BirthProposal
     proposal::P
     m::Int
-    function AuxiliaryGibbs(proposal::P, m::Int) where {P<:BirthProposal}
+    skip::Float64
+    function AuxiliaryGibbs(proposal::P, m::Int; skip::Real = Inf) where {P<:BirthProposal}
         m >= 1 || throw(ArgumentError("m must be at least 1"))
+        skip > 0 || throw(ArgumentError("skip must be positive"))
         proposal isa AuxiliaryGibbs && throw(ArgumentError("nested AuxiliaryGibbs"))
-        new{P}(proposal, m)
+        new{P}(proposal, m, Float64(skip))
     end
 end
 

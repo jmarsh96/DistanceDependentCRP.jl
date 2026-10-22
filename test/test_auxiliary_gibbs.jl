@@ -85,7 +85,46 @@ tv_distance(p, q) = 0.5 * sum(abs(get(p, z, 0.0) - get(q, z, 0.0)) for z in unio
         @test s.c[2, :] == c0
     end
 
+    # Small skips put most blocks far, so the near/far MH move carries much of the mass
+    @testset "skipping far blocks matches the exact partition posterior (skip = $skip, m = $m)" for
+            skip in (0.5, 1.5), m in (1, 3)
+        Random.seed!(77 + m)
+        opts = MCMCOptions(n_samples = 60_000, verbose = false, track_diagnostics = false,
+                           infer_params = Dict(:α_ddcrp => false, :s_ddcrp => false))
+        s = mcmc(PoissonClusterRates(), CountData(y, D), ddcrp, priors,
+                 AuxiliaryGibbs(LogNormalMomentMatch(0.5), m; skip = skip); opts = opts)
+        emp = partition_frequencies(s.c[5_001:end, :])
+        @test tv_distance(emp, exact) < 0.03
+    end
+
+    @testset "a skip no block reaches leaves the chain unchanged" begin
+        opts = MCMCOptions(n_samples = 500, verbose = false, track_diagnostics = false,
+                           infer_params = Dict(:α_ddcrp => false, :s_ddcrp => false))
+        run(p) = (Random.seed!(5); mcmc(PoissonClusterRates(), CountData(y, D), ddcrp, priors, p; opts = opts).c)
+        @test run(AuxiliaryGibbs(LogNormalMomentMatch(0.5), 2)) ==
+              run(AuxiliaryGibbs(LogNormalMomentMatch(0.5), 2; skip = 1e6))
+    end
+
+    @testset "skip: dicts stay in step with the links" begin
+        Random.seed!(8)
+        n = 30
+        xs = sort(rand(n) .* 5)
+        Dn = [abs(a - b) for a in xs, b in xs]
+        data = CountData(rand(Poisson(4), n), Dn)
+        state = initialise_state(PoissonClusterRates(), data, ddcrp, priors)
+        log_DDCRP = precompute_log_ddcrp(ddcrp.decay_fn, ddcrp.α, ddcrp.scale, Dn)
+        p = AuxiliaryGibbs(LogNormalMomentMatch(0.5), 3; skip = 1.0)
+        ok = true
+        for _ in 1:20, i in 1:n
+            DD.update_c_i!(PoissonClusterRates(), i, state, data, priors, log_DDCRP, p,
+                           NoUpdate(), UniformLink(), DD.StandardUpdate())
+            ok &= Set(keys(state.λ_dict)) == Set(sort.(table_vector(state.c)))
+        end
+        @test ok
+    end
+
     @test_throws ArgumentError AuxiliaryGibbs(PriorProposal(), 0)
+    @test_throws ArgumentError AuxiliaryGibbs(PriorProposal(), 1; skip = 0)
 
     @testset "moving-set likelihood: factorised and generic forms agree" begin
         Random.seed!(11)
