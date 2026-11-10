@@ -32,11 +32,11 @@ export get_missing_mask, has_missing
 export PriorProposal, ConjugateProposal, MomentMatchedProposal
 export NormalMomentMatch, InverseGammaMomentMatch, LogNormalMomentMatch
 export FixedDistributionProposal, MixedProposal
-export AuxiliaryGibbs, set_partition!, contribution_with
+export AuxiliaryGibbs, AuxiliaryMH, set_partition!, contribution_with, cluster_logprior
 
 # Fixed-dimension proposals for RJMCMC
 export FixedDimensionProposal, NoUpdate, WeightedMean, Resample, MixedFixedDim
-export LinkProposal, UniformLink, PriorLink
+export LinkProposal, UniformLink, PriorLink, MetropolisedPriorLink
 
 # Poisson model variants
 export PoissonClusterRates, PoissonClusterRatesState, PoissonClusterRatesPriors, PoissonClusterRatesSamples
@@ -86,7 +86,7 @@ export update_α_ddcrp, update_s_ddcrp, update_s_ddcrp_augmented
 
 # Core DDCRP utilities
 export construct_distance_matrix, decay
-export precompute_log_ddcrp, ddcrp_contribution
+export precompute_log_ddcrp, ddcrp_contribution, DDCRPMatrix, set_alpha!
 export table_vector, table_vector_minus_i
 export compute_table_assignments, table_assignments_to_vector
 export simulate_ddcrp
@@ -149,6 +149,7 @@ include("models/gamma/gamma_cluster_shape_marg.jl")
 include("samplers/gibbs.jl")
 include("samplers/rjmcmc.jl")
 include("samplers/auxiliary_gibbs.jl")
+include("samplers/auxiliary_mh.jl")
 
 # MCMC loop (depends on models and samplers)
 include("inference/mcmc.jl")

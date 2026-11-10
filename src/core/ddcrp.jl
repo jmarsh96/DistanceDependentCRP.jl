@@ -64,6 +64,44 @@ function precompute_log_ddcrp(f, α, scale, D)
 end
 
 """
+    DDCRPMatrix(f, α, scale, D)
+
+The log-DDCRP matrix of `precompute_log_ddcrp`, read as an ordinary matrix,
+that also caches the link weights `exp(log_DDCRP)` by row and their
+off-diagonal row sums. `set_alpha!` changes α by rewriting the diagonal alone,
+and prior link proposals draw from the cached weights without exponentials.
+"""
+struct DDCRPMatrix <: AbstractMatrix{Float64}
+    logw::Matrix{Float64}
+    wt::Matrix{Float64}         # wt[j, i] = exp(logw[i, j]): row i is contiguous
+    offsum::Vector{Float64}     # Σ_{j ≠ i} wt[j, i]
+end
+
+function DDCRPMatrix(f, α, scale, D)
+    logw = precompute_log_ddcrp(f, α, scale, D)
+    wt = permutedims(exp.(logw))
+    offsum = [sum(view(wt, :, i)) - wt[i, i] for i in axes(wt, 2)]
+    return DDCRPMatrix(logw, wt, offsum)
+end
+
+Base.size(L::DDCRPMatrix) = size(L.logw)
+Base.@propagate_inbounds Base.getindex(L::DDCRPMatrix, i::Int, j::Int) = L.logw[i, j]
+
+"""
+    set_alpha!(L::DDCRPMatrix, α)
+
+Set the self-link weight to α in place; the off-diagonal entries do not depend on it.
+"""
+function set_alpha!(L::DDCRPMatrix, α)
+    la = log(α)
+    @inbounds for i in axes(L.logw, 1)
+        L.logw[i, i] = la
+        L.wt[i, i] = α
+    end
+    return L
+end
+
+"""
     ddcrp_contribution(c, log_DDCRP)
 
 Compute log-probability of customer assignment configuration c

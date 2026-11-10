@@ -17,7 +17,6 @@ Each model returns its specific set of dicts, e.g.:
 """
 function cluster_param_dicts end
 
-
 """
     sample_birth_params(model::LikelihoodModel, proposal::BirthProposal,
                         S_i::Vector{Int}, state::AbstractMCMCState,

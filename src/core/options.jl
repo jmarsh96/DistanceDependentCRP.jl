@@ -15,6 +15,8 @@ are passed directly to `mcmc` as arguments, not through options.
 - `prop_sds::Dict{Symbol, Float64}`: Proposal standard deviations for MH parameter updates
 - `track_diagnostics::Bool`: Track acceptance rates (default: true)
 - `track_pairwise::Bool`: Track pairwise proposals (default: false)
+- `link_proposal::LinkProposal`: Proposal for `c_i` in reversible jump updates (default: `UniformLink()`)
+- `thin::Int`: Store every `thin`-th iteration, the first being the initial state (default: 1)
 """
 struct MCMCOptions
     n_samples::Int
@@ -24,6 +26,7 @@ struct MCMCOptions
     track_diagnostics::Bool
     track_pairwise::Bool
     link_proposal::LinkProposal
+    thin::Int
 end
 
 # Default constructor
@@ -40,6 +43,7 @@ function MCMCOptions(;
     track_diagnostics::Bool = true,
     track_pairwise::Bool = false,
     link_proposal::LinkProposal = UniformLink(),
+    thin::Int = 1,
 )
     return MCMCOptions(
         n_samples,
@@ -49,6 +53,7 @@ function MCMCOptions(;
         track_diagnostics,
         track_pairwise,
         link_proposal,
+        thin,
     )
 end
 

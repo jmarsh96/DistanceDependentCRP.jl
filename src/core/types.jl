@@ -191,9 +191,17 @@ all `n` values, with `m` auxiliary parameters for the moving set drawn from
 this is Neal's original algorithm. The fixed-dimension and link proposals
 passed to `mcmc` are ignored.
 
+With a finite `skip`, the existing blocks of `z(c_{-i})` whose total link weight
+from `i` is below `exp(-skip)` times the largest block weight (`M`'s included)
+are left out of the Gibbs draw, so the moving set is scored only under the near
+blocks. The far blocks are reached by a Metropolis-Hastings move between the
+near and far blocks, proposed from the link weights, so the update stays exact.
+This pays when the prior confines links to a neighbourhood (a windowed decay).
+
 # Fields
 - `proposal::P`: Density `q(· | y_M)` for the auxiliary parameters
 - `m::Int`: Number of auxiliary parameters
+- `skip::Float64`: Log weight gap beyond which a block is far (`Inf`: none; keyword)
 
 # Example
 ```julia
@@ -203,9 +211,39 @@ AuxiliaryGibbs(MixedProposal(ξ = NormalMomentMatch(2.0), ω = LogNormalMomentMa
 struct AuxiliaryGibbs{P<:BirthProposal} <: BirthProposal
     proposal::P
     m::Int
-    function AuxiliaryGibbs(proposal::P, m::Int) where {P<:BirthProposal}
+    skip::Float64
+    function AuxiliaryGibbs(proposal::P, m::Int; skip::Real = Inf) where {P<:BirthProposal}
         m >= 1 || throw(ArgumentError("m must be at least 1"))
+        skip > 0 || throw(ArgumentError("skip must be positive"))
         proposal isa AuxiliaryGibbs && throw(ArgumentError("nested AuxiliaryGibbs"))
+        new{P}(proposal, m, Float64(skip))
+    end
+end
+
+"""
+    AuxiliaryMH{P<:BirthProposal} <: BirthProposal
+
+Select the Metropolised form of Algorithm 8 for the links: a reversible jump
+update in which `c_i` is proposed by the link proposal and accepted by
+Metropolis-Hastings, and a move that creates or removes the moving set's own
+cluster weighs `m` auxiliary parameters from `proposal`, the current value
+taking a random slot when it exists. With `m = 1` it is the reversible jump
+update with `NoUpdate()`, as a birth weighs one draw from `q`. Larger `m`
+lowers the variance of the birth and death ratios at `m` likelihood
+evaluations of the moving set, paid only on those moves. A rejected death
+refreshes the moving set's parameter from the pool. The fixed-dimension
+proposal passed to `mcmc` is ignored (clusters keep their parameters).
+
+# Fields
+- `proposal::P`: Birth density `q(· | y_M)`
+- `m::Int`: Number of auxiliary parameters
+"""
+struct AuxiliaryMH{P<:BirthProposal} <: BirthProposal
+    proposal::P
+    m::Int
+    function AuxiliaryMH(proposal::P, m::Int) where {P<:BirthProposal}
+        m >= 1 || throw(ArgumentError("m must be at least 1"))
+        proposal isa Union{AuxiliaryGibbs, AuxiliaryMH} && throw(ArgumentError("nested auxiliary proposal"))
         new{P}(proposal, m)
     end
 end
@@ -449,3 +487,17 @@ the acceptance probability depends only on the likelihood ratio and the
 parameter proposal, and every proposal lands where the prior has mass.
 """
 struct PriorLink <: LinkProposal end
+
+"""
+    MetropolisedPriorLink()
+
+Propose `c_i` from the ddCRP prior restricted to links that change the
+partition, i.e. outside the block of `z(c_{-i})` holding the current link,
+and accept with the ratio `(1 - P(b_old)) / (1 - P(b_new))` of the prior
+masses outside each block (Liu, 1996). Each accepted or rejected move is
+followed by an exact draw of `c_i` within its block, which leaves the
+partition and likelihood unchanged. Every move off the diagonal is at least as
+likely as under `PriorLink`, so it is never worse in the Peskun order.
+Supported by `AuxiliaryMH` only.
+"""
+struct MetropolisedPriorLink <: LinkProposal end
