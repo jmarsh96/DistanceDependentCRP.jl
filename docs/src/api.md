@@ -62,13 +62,6 @@ FixedDistributionProposal
 MixedProposal
 AuxiliaryGibbs
 AuxiliaryMH
-Coupled
-CoupledRJ
-ContrastProposal
-FitStudentT
-ZeroStudentT
-FitNormal
-TwoAnchor
 ```
 
 ## Fixed-Dimension Proposals
@@ -88,7 +81,6 @@ LinkProposal
 UniformLink
 PriorLink
 MetropolisedPriorLink
-InformedLink
 ```
 
 ## Poisson Models
@@ -141,16 +133,6 @@ mcmc
 set_partition!
 contribution_with
 cluster_logprior
-obs_loglik
-param_scales
-moment_fit
-prior_mean_params
-two_anchor_logQ
-two_anchor_logratio
-two_anchor_components
-two_anchor_pilot
-two_anchor_draw
-TwoAnchorStats
 ```
 
 ## Model Interface Methods

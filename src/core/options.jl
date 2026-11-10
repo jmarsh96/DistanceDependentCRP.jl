@@ -16,7 +16,6 @@ are passed directly to `mcmc` as arguments, not through options.
 - `track_diagnostics::Bool`: Track acceptance rates (default: true)
 - `track_pairwise::Bool`: Track pairwise proposals (default: false)
 - `link_proposal::LinkProposal`: Proposal for `c_i` in reversible jump updates (default: `UniformLink()`)
-- `two_anchor`: `nothing`, or a `TwoAnchor` multi-link split/merge applied after each sweep
 - `thin::Int`: Store every `thin`-th iteration, the first being the initial state (default: 1)
 """
 struct MCMCOptions
@@ -27,7 +26,6 @@ struct MCMCOptions
     track_diagnostics::Bool
     track_pairwise::Bool
     link_proposal::LinkProposal
-    two_anchor::Union{Nothing, TwoAnchor}
     thin::Int
 end
 
@@ -45,7 +43,6 @@ function MCMCOptions(;
     track_diagnostics::Bool = true,
     track_pairwise::Bool = false,
     link_proposal::LinkProposal = UniformLink(),
-    two_anchor::Union{Nothing, TwoAnchor} = nothing,
     thin::Int = 1,
 )
     return MCMCOptions(
@@ -56,7 +53,6 @@ function MCMCOptions(;
         track_diagnostics,
         track_pairwise,
         link_proposal,
-        two_anchor,
         thin,
     )
 end
