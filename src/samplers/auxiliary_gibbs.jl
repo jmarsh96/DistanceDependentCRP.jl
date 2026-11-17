@@ -46,13 +46,53 @@ parameters in O(|M|) instead of through contributions of the whole cluster.
 """
 cluster_logprior(::LikelihoodModel, params, priors) = nothing
 
+"""
+    suff_stats(model, M, state, data)
+
+Additive sufficient statistics of the observations in `M`, or `nothing` (the default). A
+model that defines them, together with `stats_contribution`, declares that
+`table_contribution(table)` equals `stats_contribution(model, suff_stats(table), ρ, priors)`
+and that `suff_stats(A ∪ B) == suff_stats(A) + suff_stats(B)` for disjoint `A` and `B`, which
+lets the auxiliary samplers score a moving set under a block's parameters in O(|M|) + O(1)
+although the cluster likelihood does not factorise over observations.
+"""
+suff_stats(::LikelihoodModel, ::AbstractVector{Int}, ::AbstractMCMCState, ::AbstractObservedData) = nothing
+
+"""
+    cluster_stats(model, table, state, data)
+
+`suff_stats` of a cluster, memoised by models that keep a cache in their state (the default
+recomputes).
+"""
+cluster_stats(model::LikelihoodModel, table::AbstractVector{Int}, state::AbstractMCMCState,
+              data::AbstractObservedData) = suff_stats(model, table, state, data)
+
+"""
+    stats_contribution(model, stats, params, priors)
+
+`table_contribution` of a cluster with sufficient statistics `stats` and parameters `params`.
+"""
+function stats_contribution end
+
+# table_contribution of M under ρ, from M's statistics `sM` when the model has them
+_contribution_with(model, M, ::Nothing, ρ, state, data, priors) =
+    contribution_with(model, M, ρ, state, data, priors)
+_contribution_with(model, M, sM, ρ, state, data, priors) = stats_contribution(model, sM, ρ, priors)
+
 # log p(y_M | ρ) for the moving set M joining block B, whose parameters are ρ
-function moving_set_loglik(model::LikelihoodModel, M::Vector{Int}, ρ::NamedTuple, B::Vector{Int},
+moving_set_loglik(model::LikelihoodModel, M::Vector{Int}, ρ::NamedTuple, B::Vector{Int},
+                  state::AbstractMCMCState, data::AbstractObservedData, priors::AbstractPriors) =
+    moving_set_loglik(model, M, suff_stats(model, M, state, data), ρ, B, state, data, priors)
+
+# The same with M's statistics `sM` already in hand (`nothing` for a model without them)
+function moving_set_loglik(model::LikelihoodModel, M::Vector{Int}, sM, ρ::NamedTuple, B::Vector{Int},
                            state::AbstractMCMCState, data::AbstractObservedData, priors::AbstractPriors)
     lp = cluster_logprior(model, ρ, priors)
-    isnothing(lp) || return contribution_with(model, M, ρ, state, data, priors) - lp
-    return contribution_with(model, sorted_merge(M, B), ρ, state, data, priors) -
-           contribution_with(model, B, ρ, state, data, priors)
+    isnothing(lp) || return _contribution_with(model, M, sM, ρ, state, data, priors) - lp
+    isnothing(sM) && return contribution_with(model, sorted_merge(M, B), ρ, state, data, priors) -
+                            contribution_with(model, B, ρ, state, data, priors)
+    sB = cluster_stats(model, B, state, data)
+    return stats_contribution(model, sB + sM, ρ, priors) - stats_contribution(model, sB, ρ, priors)
 end
 
 function _logsumexp(x::AbstractVector{Float64})
@@ -82,6 +122,7 @@ function update_c_i!(
     R = sorted_setdiff(table_O, M)
     own = isempty(R)
     ρ_O = map(d -> d[table_O], dicts)
+    sM = suff_stats(model, M, state, data)
 
     # Blocks other than M; R, if non-empty, is last and carries ρ_O
     blocks = Vector{Vector{Int}}()
@@ -100,7 +141,7 @@ function update_c_i!(
 
     # log p(y_M | ρ_B), NaN until computed
     logw = fill(NaN, L)
-    lik(l) = isnan(logw[l]) ? (logw[l] = moving_set_loglik(model, M, ρ_block(l), blocks[l], state, data, priors)) : logw[l]
+    lik(l) = isnan(logw[l]) ? (logw[l] = moving_set_loglik(model, M, sM, ρ_block(l), blocks[l], state, data, priors)) : logw[l]
 
     # Far blocks (link weight below exp(-skip) of the largest) leave the Gibbs draw and are
     # reached by an MH move between them and the near blocks
@@ -136,7 +177,7 @@ function update_c_i!(
         else
             aux[t], log_q = sample_birth_params(model, p.proposal, M, state, data, priors)
         end
-        a[t] = contribution_with(model, M, aux[t], state, data, priors) - log_q
+        a[t] = _contribution_with(model, M, sM, aux[t], state, data, priors) - log_q
         isnan(a[t]) && (a[t] = -Inf)
     end
     log_aux = _logsumexp(a) - log(m)

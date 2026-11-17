@@ -11,9 +11,10 @@ birth_params_logpdf(model::LikelihoodModel, p::AuxiliaryMH, params_old::NamedTup
                     priors::AbstractPriors) =
     birth_params_logpdf(model, p.proposal, params_old, S_i, state, data, priors)
 
-# Pool of m parameters for M from q, with ρ_M in a random slot when M is on its own
-# (`own`). Returns the pool, the log weights π·lik/q and the log of their mean.
-function _auxiliary_pool(model, q, m, M, ρ_M::T, own, state, data, priors) where {T}
+# Pool of m parameters for M from q, with ρ_M in a random slot when M is on its own (`own`);
+# `sM` is M's sufficient statistics or `nothing`. Returns the pool, the log weights π·lik/q and
+# the log of their mean.
+function _auxiliary_pool(model, q, m, M, sM, ρ_M::T, own, state, data, priors) where {T}
     aux = Vector{T}(undef, m)
     a = Vector{Float64}(undef, m)
     h_cur = own ? rand(1:m) : 0
@@ -24,7 +25,7 @@ function _auxiliary_pool(model, q, m, M, ρ_M::T, own, state, data, priors) wher
         else
             aux[t], log_q = sample_birth_params(model, q, M, state, data, priors)
         end
-        a[t] = contribution_with(model, M, aux[t], state, data, priors) - log_q
+        a[t] = _contribution_with(model, M, sM, aux[t], state, data, priors) - log_q
         isnan(a[t]) && (a[t] = -Inf)
     end
     return aux, a, _logsumexp(a) - log(m)
@@ -118,12 +119,13 @@ function update_c_i!(
         accepted && (state.c[i] = j_star)
         return (:fixed, j_star, accepted)
     end
+    sM = suff_stats(model, M, state, data)
 
     if !own && !star_M
         # M moves from O to B; both keep their parameters
         ρ_B = map(d -> d[B], dicts)
-        log_α = moving_set_loglik(model, M, ρ_B, B, state, data, priors) -
-                moving_set_loglik(model, M, ρ_O, R, state, data, priors) + corr
+        log_α = moving_set_loglik(model, M, sM, ρ_B, B, state, data, priors) -
+                moving_set_loglik(model, M, sM, ρ_O, R, state, data, priors) + corr
         move = :fixed
         accepted = log(rand()) < log_α
         if accepted
@@ -135,8 +137,8 @@ function update_c_i!(
         end
     elseif !own
         # Birth: M leaves O for a cluster of its own
-        aux, a, log_W = _auxiliary_pool(model, p.proposal, p.m, M, ρ_O, false, state, data, priors)
-        log_α = log_W - moving_set_loglik(model, M, ρ_O, R, state, data, priors) + corr
+        aux, a, log_W = _auxiliary_pool(model, p.proposal, p.m, M, sM, ρ_O, false, state, data, priors)
+        log_α = log_W - moving_set_loglik(model, M, sM, ρ_O, R, state, data, priors) + corr
         move = :birth
         accepted = log(rand()) < log_α
         if accepted
@@ -149,8 +151,8 @@ function update_c_i!(
     else
         # Death: M's cluster joins B
         ρ_B = map(d -> d[B], dicts)
-        aux, a, log_W = _auxiliary_pool(model, p.proposal, p.m, M, ρ_O, true, state, data, priors)
-        log_α = moving_set_loglik(model, M, ρ_B, B, state, data, priors) - log_W + corr
+        aux, a, log_W = _auxiliary_pool(model, p.proposal, p.m, M, sM, ρ_O, true, state, data, priors)
+        log_α = moving_set_loglik(model, M, sM, ρ_B, B, state, data, priors) - log_W + corr
         move = :death
         accepted = log(rand()) < log_α
         if accepted

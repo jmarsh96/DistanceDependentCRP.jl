@@ -33,6 +33,7 @@ export PriorProposal, ConjugateProposal, MomentMatchedProposal
 export NormalMomentMatch, InverseGammaMomentMatch, LogNormalMomentMatch
 export FixedDistributionProposal, MixedProposal
 export AuxiliaryGibbs, AuxiliaryMH, set_partition!, contribution_with, cluster_logprior
+export suff_stats, cluster_stats, stats_contribution
 
 # Fixed-dimension proposals for RJMCMC
 export FixedDimensionProposal, NoUpdate, WeightedMean, Resample, MixedFixedDim
