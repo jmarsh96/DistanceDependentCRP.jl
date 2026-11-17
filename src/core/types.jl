@@ -468,6 +468,13 @@ struct MissingUpdate <: CustomerUpdate end
 # likelihood evaluation before it is rejected.
 # ============================================================================
 
+"""
+    LinkProposal
+
+Abstract type for proposals of a new link `c_i` in the RJMCMC assignment update:
+[`UniformLink`](@ref), [`PriorLink`](@ref) or [`MetropolisedPriorLink`](@ref).
+Set it with `MCMCOptions(link_proposal = ...)`.
+"""
 abstract type LinkProposal end
 
 """
