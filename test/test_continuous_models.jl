@@ -212,4 +212,93 @@
         @test isfinite(contrib_large)
     end
 
+    @testset "GammaClusterShapeMarg - cluster statistics" begin
+        const_DD = DistanceDependentCRP
+        model = GammaClusterShapeMarg()
+        Random.seed!(7)
+        n = 18
+        data_sim = simulate_gamma_data(n, [2.0, 5.0], [1.0, 2.0]; α=0.2, scale=5.0)
+        data = ContinuousData(data_sim.y, data_sim.D)
+        ddcrp = DDCRPParams(0.2, 5.0)
+        priors = GammaClusterShapeMargPriors(2.0, 0.5, 2.0, 0.5)
+        y = data_sim.y
+
+        # Reference: the closed form written out from the raw observations
+        function ref(table, α)
+            m = length(table); sy = sum(y[table]); sl = sum(log.(y[table]))
+            (α - 1) * sl - m * const_DD.loggamma(α) + const_DD.loggamma(m * α + priors.β_a) -
+                const_DD.loggamma(priors.β_a) + priors.β_a * log(priors.β_b) -
+                (m * α + priors.β_a) * log(sy + priors.β_b) + logpdf(Gamma(priors.α_a, 1 / priors.α_b), α)
+        end
+
+        state = initialise_state(model, data, ddcrp, priors)
+        for (t, α) in state.α_dict
+            @test table_contribution(model, t, state, data, priors) ≈ ref(t, α)
+            @test haskey(state.stats, t)
+            @test table_contribution(model, t, state, data, priors) ≈ ref(t, α)   # memo hit
+        end
+        @test length(state.logy) == n
+
+        # Two-argument constructor: log y filled lazily
+        t_all = collect(1:n)
+        state2 = GammaClusterShapeMargState(ones(Int, n), Dict{Vector{Int},Float64}(t_all => 3.0))
+        @test isempty(state2.logy)
+        @test table_contribution(model, t_all, state2, data, priors) ≈ ref(t_all, 3.0)
+        @test length(state2.logy) == n
+
+        # Moving-set likelihood from statistics equals the generic difference and the reference
+        M, B = [2, 5, 9], [1, 3, 4, 7]
+        ρ = (α = 2.3,)
+        keys_before = Set(keys(state.α_dict))
+        fast = const_DD.moving_set_loglik(model, M, ρ, B, state, data, priors)
+        slow = contribution_with(model, const_DD.sorted_merge(M, B), ρ, state, data, priors) -
+               contribution_with(model, B, ρ, state, data, priors)
+        @test fast ≈ slow
+        @test fast ≈ ref(sort(vcat(M, B)), ρ.α) - ref(B, ρ.α)
+        @test Set(keys(state.α_dict)) == keys_before
+        sM = suff_stats(model, M, state, data)
+        @test sM.n == 3 && sM.sy ≈ sum(y[M]) && sM.slogy ≈ sum(log.(y[M]))
+        @test stats_contribution(model, sM, ρ, priors) ≈ ref(M, ρ.α)
+        @test isnothing(suff_stats(PoissonClusterRates(), [1], state, data))
+
+        # Pool log weights with sM equal contribution_with per auxiliary
+        q = LogNormalMomentMatch(0.5)
+        Random.seed!(3)
+        aux, a, _ = const_DD._auxiliary_pool(model, q, 3, M, sM, ρ, true, state, data, priors)
+        for t in 1:3
+            lq = birth_params_logpdf(model, q, aux[t], M, state, data, priors)
+            @test a[t] ≈ contribution_with(model, M, aux[t], state, data, priors) - lq
+        end
+
+        # Eviction drops tables that are not clusters
+        contribution_with(model, [1, 2, 3], ρ, state, data, priors)
+        @test haskey(state.stats, [1, 2, 3])
+        update_params!(model, state, data, priors, table_vector(state.c), zeros(n, n),
+                       MCMCOptions(infer_params = Dict(:α => false)))
+        @test all(haskey(state.α_dict, k) for k in keys(state.stats))
+
+        # Chain equality: flushing the memo before every update changes nothing
+        L = precompute_log_ddcrp(ddcrp.decay_fn, ddcrp.α, ddcrp.scale, data_sim.D)
+        opts = MCMCOptions(prop_sds = Dict(:α => 0.5))
+        function run(p, flush)
+            Random.seed!(99)
+            st = initialise_state(model, data, ddcrp, priors)
+            cs = Vector{Vector{Int}}()
+            for _ in 1:30
+                flush && empty!(st.stats)
+                update_params!(model, st, data, priors, table_vector(st.c), L, opts)
+                for i in 1:n
+                    flush && empty!(st.stats)
+                    const_DD.update_c_i!(model, i, st, data, priors, L, p, NoUpdate(), PriorLink(),
+                                         const_DD.StandardUpdate())
+                end
+                push!(cs, copy(st.c))
+            end
+            return cs, st.α_dict
+        end
+        for p in (AuxiliaryGibbs(q, 2), AuxiliaryMH(q, 2), q)
+            @test run(p, false) == run(p, true)
+        end
+    end
+
 end

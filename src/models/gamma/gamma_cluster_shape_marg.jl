@@ -47,6 +47,14 @@ struct GammaClusterShapeMarg <: GammaModel end
 # State Type
 # ============================================================================
 
+# Additive sufficient statistics of a set of observations: stats(A ∪ B) = stats(A) + stats(B)
+struct GammaStats{T<:Real}
+    n::Int
+    sy::T       # Σ y
+    slogy::T    # Σ log y
+end
+Base.:+(a::GammaStats, b::GammaStats) = GammaStats(a.n + b.n, a.sy + b.sy, a.slogy + b.slogy)
+
 """
     GammaClusterShapeMargState{T<:Real} <: AbstractMCMCState{T}
 
@@ -55,11 +63,21 @@ State for GammaClusterShapeMarg model.
 # Fields
 - `c::Vector{Int}`: Customer assignments (link representation)
 - `α_dict::Dict{Vector{Int}, T}`: Table -> cluster shape parameter mapping
+- `logy::Vector{T}`: log of the observations, filled on first use
+- `stats::Dict{Vector{Int}, GammaStats{T}}`: memo of cluster sufficient statistics, keyed like
+  `α_dict`; entries whose table is no longer a cluster are dropped once per sweep
+
+A state is bound to the first `data` it is evaluated against.
 """
 mutable struct GammaClusterShapeMargState{T<:Real} <: AbstractMCMCState{T}
     c::Vector{Int}
     α_dict::Dict{Vector{Int}, T}
+    logy::Vector{T}
+    stats::Dict{Vector{Int}, GammaStats{T}}
 end
+
+GammaClusterShapeMargState(c::Vector{Int}, α_dict::Dict{Vector{Int}, T}) where {T<:Real} =
+    GammaClusterShapeMargState{T}(c, α_dict, T[], Dict{Vector{Int}, GammaStats{T}}())
 
 # ============================================================================
 # Priors Type
@@ -322,16 +340,31 @@ function birth_param_logpdf(::GammaClusterShapeMarg, ::Val{:α}, prop::FixedDist
 end
 
 # ============================================================================
-# Table Contribution (Marginal Likelihood)
+# Sufficient Statistics and Table Contribution (Marginal Likelihood)
 # ============================================================================
 
+# log y, computed once per state
+function _logy!(state::GammaClusterShapeMargState, data::ContinuousData)
+    isempty(state.logy) && append!(state.logy, log.(observations(data)))
+    return state.logy
+end
+
+function suff_stats(::GammaClusterShapeMarg, M::AbstractVector{Int}, state::GammaClusterShapeMargState,
+                    data::ContinuousData)
+    y = observations(data)
+    ly = _logy!(state, data)
+    return GammaStats(length(M), sum(view(y, M)), sum(view(ly, M)))
+end
+
+cluster_stats(model::GammaClusterShapeMarg, table::AbstractVector{Int}, state::GammaClusterShapeMargState,
+              data::ContinuousData) =
+    get!(() -> suff_stats(model, table, state, data), state.stats, table)
+
 """
-    table_contribution(model::GammaClusterShapeMarg, table, state, data, priors)
+    stats_contribution(model::GammaClusterShapeMarg, stats, params, priors)
 
-Compute log-contribution of a table with marginalised cluster rate.
-Uses Gamma-Gamma conjugacy to integrate out β.
-
-The marginal likelihood for n observations y_1,...,y_n with shape α is:
+Log-contribution of a cluster with sufficient statistics `stats` and shape `params.α`, with the
+rate β integrated out by Gamma-Gamma conjugacy. For n observations y_1,...,y_n with shape α,
     log p(y | α, β_a, β_b) =
         (α - 1) * Σ log(y_i)
         - n * loggamma(α)
@@ -339,38 +372,31 @@ The marginal likelihood for n observations y_1,...,y_n with shape α is:
         - loggamma(β_a)
         + β_a * log(β_b)
         - (n*α + β_a) * log(Σy_i + β_b)
+plus the Gamma(α_a, α_b) log prior density of α.
 """
-function table_contribution(
-    ::GammaClusterShapeMarg,
-    table::AbstractVector{Int},
-    state::GammaClusterShapeMargState,
-    data::ContinuousData,
-    priors::GammaClusterShapeMargPriors
-)
-    y = observations(data)
-    α = state.α_dict[table]
-
-    if α <= 0
-        return -Inf
-    end
-
-    n = length(table)
-    sum_y = sum(view(y, table))
-    sum_log_y = sum(log, view(y, table))
-
-    # Marginal likelihood (integrating out β)
-    log_lik = (α - 1) * sum_log_y -
-              n * loggamma(α) +
-              loggamma(n * α + priors.β_a) -
+function stats_contribution(::GammaClusterShapeMarg, s::GammaStats, params::NamedTuple,
+                            priors::GammaClusterShapeMargPriors)
+    α = params.α
+    α <= 0 && return -Inf
+    log_lik = (α - 1) * s.slogy -
+              s.n * loggamma(α) +
+              loggamma(s.n * α + priors.β_a) -
               loggamma(priors.β_a) +
               priors.β_a * log(priors.β_b) -
-              (n * α + priors.β_a) * log(sum_y + priors.β_b)
-
-    # Prior on α_k: α ~ Gamma(α_a, α_b) where α_b is rate parameter
-    log_prior_α = logpdf(Gamma(priors.α_a, 1/priors.α_b), α)
-
-    return log_lik + log_prior_α
+              (s.n * α + priors.β_a) * log(s.sy + priors.β_b)
+    return log_lik + logpdf(Gamma(priors.α_a, 1/priors.α_b), α)
 end
+
+"""
+    table_contribution(model::GammaClusterShapeMarg, table, state, data, priors)
+
+`stats_contribution` of a table from its memoised sufficient statistics and its shape in
+`state.α_dict`.
+"""
+table_contribution(model::GammaClusterShapeMarg, table::AbstractVector{Int},
+                   state::GammaClusterShapeMargState, data::ContinuousData,
+                   priors::GammaClusterShapeMargPriors) =
+    stats_contribution(model, cluster_stats(model, table, state, data), (α = state.α_dict[table],), priors)
 
 # ============================================================================
 # Posterior
@@ -474,6 +500,7 @@ function update_params!(
     log_DDCRP::AbstractMatrix,
     opts::MCMCOptions
 )
+    filter!(kv -> haskey(state.α_dict, kv.first), state.stats)   # drop tables no longer clusters
     if should_infer(opts, :α)
         update_α!(model, state, data, priors; prop_sd=get_prop_sd(opts, :α))
     end

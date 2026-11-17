@@ -133,6 +133,9 @@ mcmc
 set_partition!
 contribution_with
 cluster_logprior
+suff_stats
+cluster_stats
+stats_contribution
 ```
 
 ## Model Interface Methods
